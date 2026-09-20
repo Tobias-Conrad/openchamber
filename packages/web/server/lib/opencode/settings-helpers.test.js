@@ -759,6 +759,7 @@ describe('settings registry gate', () => {
   // stops accepting a key the registry still lists — that is the drift the
   // registry exists to end.
   const validValues = {
+    vision: { model: 'anthropic/claude-sonnet-4', prompt: 'Describe the image.' },
     themeId: 'openchamber-dark', useSystemTheme: true, themeVariant: 'dark', lightThemeId: 'openchamber-light', darkThemeId: 'openchamber-dark',
     splashBgLight: '#fff', splashFgLight: '#000', splashBgDark: '#000', splashFgDark: '#fff',
     lastDirectory: '/home/testuser/project', homeDirectory: '/home/testuser', opencodeBinary: '/usr/local/bin/opencode',
@@ -900,6 +901,13 @@ describe('settings registry gate', () => {
 });
 
 describe('vision config sanitizer', () => {
+  it('accepts a model id that itself contains slashes (OpenRouter style)', () => {
+    const helpers = createTestHelpers();
+    expect(helpers.sanitizeSettingsUpdate({
+      vision: { model: 'openrouter/google/gemini-2.0-flash-001' },
+    })).toEqual({ vision: { model: 'openrouter/google/gemini-2.0-flash-001' } });
+  });
+
   it('round-trips a valid vision config', () => {
     const helpers = createTestHelpers();
     expect(helpers.sanitizeSettingsUpdate({

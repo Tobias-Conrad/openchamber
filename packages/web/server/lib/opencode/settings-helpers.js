@@ -50,7 +50,7 @@ export const DEFAULT_VISION_PROMPT = [
   'region is unclear, cropped, or unreadable.',
 ].join('\n');
 
-const VISION_MODEL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._-]*$/;
+const VISION_MODEL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._/-]*$/;
 const VISION_PROMPT_MAX_LENGTH = 4_000;
 
 // Returns the normalized { model, prompt? } config or undefined when the value
