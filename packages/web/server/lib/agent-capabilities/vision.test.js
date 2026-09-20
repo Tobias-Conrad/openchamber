@@ -22,13 +22,20 @@ const createRuntime = (overrides = {}) => {
   const fetchMock = vi.fn();
   const previousFetch = globalThis.fetch;
   globalThis.fetch = fetchMock;
+  // The runtime validates and reads one open descriptor, so the tests inject
+  // `openFile` and derive it from the per-test stat/read doubles. `realpathFile`
+  // is a no-op unless a test wants to exercise the descriptor re-check.
   const runtime = createVisionRuntime({
     readSettingsFromDiskMigrated: vi.fn(async () => ({ vision: { model: 'anthropic/claude-sonnet-4' } })),
     buildOpenCodeUrl: (urlPath) => `http://127.0.0.1:4099${urlPath}`,
     getOpenCodeAuthHeaders: () => ({ authorization: 'Bearer test' }),
-    statFile: vi.fn(async () => ({ isFile: () => true, size: PNG_BYTES.length })),
-    readFile: vi.fn(async () => PNG_BYTES),
-    realpathFile: vi.fn(async (filePath) => filePath),
+    realpathFile: overrides.realpathFile ?? (async (filePath) => filePath),
+    openFile: overrides.openFile ?? (async (filePath) => ({
+      fd: 42,
+      stat: () => (overrides.statFile ?? (async () => ({ isFile: () => true, size: PNG_BYTES.length })))(filePath),
+      readFile: () => (overrides.readFile ?? (async () => PNG_BYTES))(filePath),
+      close: async () => undefined,
+    })),
     ...overrides,
   });
   return { runtime, fetchMock, restore: () => { globalThis.fetch = previousFetch; } };
@@ -263,6 +270,45 @@ describe('createVisionRuntime', () => {
       callSmallModel.mockResolvedValue('ok');
       const result = await runtime.execute({ imagePath: '/work/link.png', directory: '/work' });
       expect(result.description).toBe('ok');
+    } finally {
+      restore();
+    }
+  });
+
+  it('rejects when the path is swapped for an outside target between check and read', async () => {
+    // First realpath (containment check) is inside; the post-open re-check sees
+    // the swapped target and must refuse before any provider call.
+    const { runtime, fetchMock, restore } = createRuntime({
+      realpathFile: vi.fn()
+        .mockResolvedValueOnce('/work/shot.png')
+        .mockResolvedValueOnce('/etc/private.png'),
+    });
+    try {
+      fetchMock.mockResolvedValue(imageCapableProviders());
+      await expect(runtime.execute({ imagePath: '/work/shot.png', directory: '/work' }))
+        .rejects.toMatchObject({ statusCode: 400, message: expect.stringContaining('inside the session directory') });
+      expect(callSmallModel).not.toHaveBeenCalled();
+    } finally {
+      restore();
+    }
+  });
+
+  it('validates and reads one opened descriptor instead of reopening the path', async () => {
+    const openFile = vi.fn(async () => ({
+      fd: 7,
+      stat: async () => ({ isFile: () => true, size: PNG_BYTES.length }),
+      readFile: async () => PNG_BYTES,
+      close: async () => undefined,
+    }));
+    const { runtime, fetchMock, restore } = createRuntime({ openFile });
+    try {
+      fetchMock.mockResolvedValue(imageCapableProviders());
+      callSmallModel.mockResolvedValue('ok');
+
+      await runtime.execute({ imagePath: '/work/shot.png', directory: '/work' });
+
+      expect(openFile).toHaveBeenCalledTimes(1);
+      expect(openFile.mock.calls[0][0]).toBe('/work/shot.png');
     } finally {
       restore();
     }

@@ -99,7 +99,28 @@ export const VisionSettings: React.FC = () => {
     return () => controller.abort();
   }, [t]);
 
-  const persistConfig = React.useCallback(async (next: { model?: string; prompt?: string }): Promise<VisionConfig | null> => {
+  // Saves can overlap (a model change while a prompt save is in flight). The
+  // server merges under one lock, but responses can still arrive out of order,
+  // so only the newest save may apply its snapshot to local state — otherwise
+  // a slow response regresses the model/prompt a newer save just wrote.
+  const saveSeqRef = React.useRef(0);
+  const pendingSavesRef = React.useRef(0);
+
+  const beginSave = React.useCallback(() => {
+    pendingSavesRef.current += 1;
+    setSaving(true);
+  }, []);
+
+  const endSave = React.useCallback(() => {
+    pendingSavesRef.current = Math.max(0, pendingSavesRef.current - 1);
+    if (pendingSavesRef.current === 0) setSaving(false);
+  }, []);
+
+  const persistConfig = React.useCallback(async (
+    next: { model?: string; prompt?: string },
+  ): Promise<{ config: VisionConfig | null; isLatest: boolean }> => {
+    const seq = saveSeqRef.current + 1;
+    saveSeqRef.current = seq;
     reportSettingsSaveState('saving');
     try {
       const response = await runtimeFetch('/api/openchamber/vision', {
@@ -111,14 +132,20 @@ export const VisionSettings: React.FC = () => {
         throw new Error(await readApiError(response, t('settings.vision.toast.saveFailed')));
       }
       const data = (await response.json()) as { config?: VisionConfig | null };
-      reportSettingsSaveState('saved');
       // The server returns the merged config (authoritative); fall back to
       // merging the submitted fields over the last known config if absent.
-      if (data.config) return data.config;
-      const fallbackModel = next.model ?? config?.model;
-      return fallbackModel ? { model: fallbackModel, ...(next.prompt !== undefined ? { prompt: next.prompt } : {}) } : null;
+      let merged: VisionConfig | null = data.config ?? null;
+      if (!merged) {
+        const fallbackModel = next.model ?? config?.model;
+        merged = fallbackModel
+          ? { model: fallbackModel, ...(next.prompt !== undefined ? { prompt: next.prompt } : {}) }
+          : null;
+      }
+      const isLatest = seq === saveSeqRef.current;
+      if (isLatest) reportSettingsSaveState('saved');
+      return { config: merged, isLatest };
     } catch (error) {
-      reportSettingsSaveState('error');
+      if (seq === saveSeqRef.current) reportSettingsSaveState('error');
       throw error;
     }
   }, [config, t]);
@@ -127,50 +154,57 @@ export const VisionSettings: React.FC = () => {
     const nextModel = providerId && modelId ? `${providerId}/${modelId}` : '';
     setModel(nextModel);
     if (!nextModel) return;
+    beginSave();
     try {
       // Send only the model; the server merges it with the persisted prompt,
       // so a concurrent prompt save is never clobbered by a stale model save.
-      const persisted = await persistConfig({ model: nextModel });
-      setConfig(persisted);
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : t('settings.vision.toast.saveFailed'));
-    }
-  }, [persistConfig, t]);
-
-  const handleSavePrompt = React.useCallback(async () => {
-    setSaving(true);
-    try {
-      // Send only the prompt; the server merges it with the persisted model,
-      // so a concurrent model change is never clobbered by a stale prompt save.
-      const persisted = await persistConfig({ prompt: promptDraft });
-      setConfig(persisted);
-      setPromptDraft(promptDraft.trim() || defaultPrompt);
-      toast.success(t('settings.vision.toast.saved'));
+      const { config: persisted, isLatest } = await persistConfig({ model: nextModel });
+      if (isLatest) setConfig(persisted);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : t('settings.vision.toast.saveFailed'));
     } finally {
-      setSaving(false);
+      endSave();
     }
-  }, [defaultPrompt, persistConfig, promptDraft, t]);
+  }, [beginSave, endSave, persistConfig, t]);
+
+  const handleSavePrompt = React.useCallback(async () => {
+    beginSave();
+    try {
+      // Send only the prompt; the server merges it with the persisted model,
+      // so a concurrent model change is never clobbered by a stale prompt save.
+      const { config: persisted, isLatest } = await persistConfig({ prompt: promptDraft });
+      if (isLatest) {
+        setConfig(persisted);
+        setPromptDraft(promptDraft.trim() || defaultPrompt);
+        toast.success(t('settings.vision.toast.saved'));
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t('settings.vision.toast.saveFailed'));
+    } finally {
+      endSave();
+    }
+  }, [beginSave, defaultPrompt, endSave, persistConfig, promptDraft, t]);
 
   const handleResetPrompt = React.useCallback(() => {
     setPromptDraft(defaultPrompt);
     if (!model) return;
     void (async () => {
+      beginSave();
       try {
-        setSaving(true);
         // An empty prompt clears the persisted prompt (the server default
         // applies at call time) while keeping the model.
-        const persisted = await persistConfig({ prompt: '' });
-        setConfig(persisted);
-        toast.success(t('settings.vision.toast.saved'));
+        const { config: persisted, isLatest } = await persistConfig({ prompt: '' });
+        if (isLatest) {
+          setConfig(persisted);
+          toast.success(t('settings.vision.toast.saved'));
+        }
       } catch (error) {
         toast.error(error instanceof Error ? error.message : t('settings.vision.toast.saveFailed'));
       } finally {
-        setSaving(false);
+        endSave();
       }
     })();
-  }, [defaultPrompt, model, persistConfig, t]);
+  }, [beginSave, defaultPrompt, endSave, model, persistConfig, t]);
 
   const parsedModel = React.useMemo(() => parseModelIdentifier(model), [model]);
 

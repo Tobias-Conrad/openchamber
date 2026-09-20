@@ -56,13 +56,25 @@ const providerModels = (provider) => {
   return [];
 };
 
+// Opening with O_NOFOLLOW makes a final-component symlink a hard error instead
+// of a silent redirect, so the validated path cannot be swapped for a link to
+// an outside file between the containment check and the open. Undefined on
+// Windows, where it degrades to a plain open.
+const OPEN_READ_FLAGS = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0);
+
+const isPathInside = (workspace, target) => {
+  const relative = path.relative(workspace, target);
+  return relative !== '' && relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+};
+
 export const createVisionRuntime = (dependencies) => {
   const {
     readSettingsFromDiskMigrated,
     buildOpenCodeUrl,
     getOpenCodeAuthHeaders,
-    statFile = (filePath) => fs.promises.stat(filePath),
-    readFile = (filePath) => fs.promises.readFile(filePath),
+    // The file is opened once and its descriptor is then validated and read:
+    // checking a path and reopening it is a TOCTOU hole, a descriptor is not.
+    openFile = (filePath, flags) => fs.promises.open(filePath, flags),
     realpathFile = (filePath) => fs.promises.realpath(filePath),
   } = dependencies;
 
@@ -158,18 +170,32 @@ export const createVisionRuntime = (dependencies) => {
       throw new OpenChamberControlError(`Failed to resolve image: ${resolvedPath}`, 400);
     }
     const resolvedWorkspace = path.resolve(workspace);
-    const relative = path.relative(resolvedWorkspace, realPath);
-    if (relative === '' || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    if (!isPathInside(resolvedWorkspace, realPath)) {
       throw new OpenChamberControlError(
         `imagePath must be inside the session directory: ${resolvedWorkspace}`,
         400,
       );
     }
 
+    // Open the validated real path once and read from that descriptor. The
+    // workspace is writable by the agent, so between a bare realpath check and
+    // a path-based read the checked path could be swapped for a symlink to a
+    // file outside the workspace; binding both the check and the read to one
+    // descriptor removes that window.
+    let handle;
+    try {
+      handle = await openFile(realPath, OPEN_READ_FLAGS);
+    } catch (error) {
+      if (error?.code === 'ENOENT') {
+        throw new OpenChamberControlError(`Image file not found: ${resolvedPath}`, 400);
+      }
+      throw new OpenChamberControlError(`Failed to read image: ${resolvedPath}`, 400);
+    }
+
     let stat;
     let buffer;
     try {
-      stat = await statFile(resolvedPath);
+      stat = await handle.stat();
       if (!stat.isFile()) {
         throw new OpenChamberControlError(`Image path is not a file: ${resolvedPath}`, 400);
       }
@@ -179,7 +205,20 @@ export const createVisionRuntime = (dependencies) => {
           400,
         );
       }
-      buffer = await readFile(resolvedPath);
+      // Bind the containment check to the open descriptor: re-resolve the
+      // validated path after the open and reject when it no longer names the
+      // same contained file (a swap between the check and the open would
+      // otherwise leave this descriptor pointing outside the workspace). The
+      // bytes are then read from the descriptor, so later path changes cannot
+      // redirect them.
+      const realPathAfterOpen = await realpathFile(realPath).catch(() => null);
+      if (!realPathAfterOpen || realPathAfterOpen !== realPath || !isPathInside(resolvedWorkspace, realPathAfterOpen)) {
+        throw new OpenChamberControlError(
+          `imagePath must be inside the session directory: ${resolvedWorkspace}`,
+          400,
+        );
+      }
+      buffer = await handle.readFile();
       // The stat was a fast-path guard; the authoritative check is the bytes
       // actually read, so a file swapped between stat and read cannot slip
       // past the cap (TOCTOU).
@@ -195,6 +234,8 @@ export const createVisionRuntime = (dependencies) => {
         throw new OpenChamberControlError(`Image file not found: ${resolvedPath}`, 400);
       }
       throw new OpenChamberControlError(`Failed to read image: ${resolvedPath}`, 400);
+    } finally {
+      await handle.close().catch(() => undefined);
     }
 
     const mime = sniffImageMime(buffer);
