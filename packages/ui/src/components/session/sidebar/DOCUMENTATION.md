@@ -79,7 +79,8 @@ same ownership resolver; rows keep the session's own directory while
 taking display ownership (project id, labels) from the index.
 
 Web and desktop show managed Chats before optional Recent activity (off by
-default since the timeline view exists; the display menu toggles it). Chats use
+default since the timeline view exists; the display menu toggles it, but the
+zone stays while it holds a waiting row — see below). Chats use
 their shared managed root for folders and never expose worktree actions. Project
 display can be all projects or one selected project. The mobile sessions sheet
 (`apps/MobileSessionsSheet.tsx`) partitions the same way through
@@ -95,6 +96,16 @@ seven rows before Show more. The
 timeline never shows Recent. VS Code excludes worktrees and managed
 Chats, while retaining its workspace-scoped grouped list and inline archived
 buckets.
+
+Waiting sessions (an unanswered question or permission, subtasks included) come from the
+cross-directory `global-blocking-requests` index and lead the `active-now` zone, ahead of the
+Recent rows (`mergeActivityItems`) — a session in work keeps its Work row instead. They are
+`pinned`: `sessionSidebarRowModel` emits `pinnedItems` before
+`collapseActivityItems(recentItems).slice(0, requested)`, so a waiting row never spends the
+zone's 7-row budget and Show more cannot cut it away. The zone renders while it holds one even
+with the Recent switch off — a buried request is what it exists to prevent; the switch still
+owns the plain Recent rows. Badge counts merge the directory store with the index per kind
+(`Math.max`), never summed: both feeds see the same requests, so one cannot count twice.
 
 Worktree groups inside a project follow `worktreeSortOrder` (profile setting
 `sidebarWorktreeSortOrder`, default `manual`). `recent` floats worktrees by session activity, so
