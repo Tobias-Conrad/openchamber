@@ -249,6 +249,16 @@ renders `projects`.
   session from all projects and worktrees in one flat list, in the shared
   lifecycle order, with pinned sessions floating first. There is no reveal
   limit: the list is virtualized.
+- The same list leads with the waiting rows the root list cannot hold: a
+  subsession that asked a question or a permission is no root, and a timeline
+  row never expands, so the request that blocked its family had no row here.
+  `SessionProjectCollection` resolves those sessions with the timeline's own
+  metadata rule and hands them to `deriveTimelineActivityItems` as
+  `waitingItems`; `mergeActivityItems` puts them first and de-duplicates a
+  waiting root against its own timeline row, so a session appears once. They are
+  ordinary flat timeline rows — depth 0, empty children, no expansion — and
+  carry their request through the same `PendingRequestBadges` as every other
+  row. Without a waiting request the list is unchanged.
 - Timeline rows carry `renderContext: 'timeline'`, depth 0 and empty children.
   They never expand, show no chevron, no folders, no project headers, no
   worktree groups and no Recent projection. Folders are not projected, so the

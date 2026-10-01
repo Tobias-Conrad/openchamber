@@ -411,8 +411,15 @@ const VisibleSessionProjects: React.FC<SessionProjectCollectionProps> = ({ topol
     if (!timelineMode) return EMPTY_TIMELINE_ITEMS;
     const rootIds = new Set(collection.rootSessions.map((session) => session.id));
     const sessions = collection.orderedSessions.filter((session) => rootIds.has(session.id) && !session.time?.archived);
+    // Waiting sessions the root-only list cannot hold: a subagent that asked a
+    // question is no root, and timeline rows never expand, so it had no row
+    // here at all while it blocked its family. They are resolved with the
+    // timeline's own metadata rule, so a waiting row reads like the rows
+    // around it — the project/branch is the "where" that replaces the tree.
+    const waitingSessions = selectPendingSessions(collection.orderedSessions, pendingSessionIds)
+      .filter((session) => !rootIds.has(session.id) && !session.time?.archived);
     const locations = resolveSidebarSessionLocations({
-      sessions,
+      sessions: waitingSessions.length === 0 ? sessions : [...sessions, ...waitingSessions],
       projects: topology.projects,
       ownerBySessionId: ownership.bySessionId,
       spaceLabelById,
@@ -422,19 +429,27 @@ const VisibleSessionProjects: React.FC<SessionProjectCollectionProps> = ({ topol
       rootBranchByProjectId: topology.projectRootBranches,
       hideBranchMatchingProjectLabel: false,
     });
+    const getSessionNode = (session: Session) => ({
+      ...buildActiveSessionNode(collection.childrenMap, session),
+      children: [],
+      worktree: locations.get(session.id)?.worktree ?? null,
+    });
     return deriveTimelineActivityItems({
       sessions,
+      waitingItems: derivePendingActivityItems({
+        sessions: waitingSessions,
+        pendingSessionIds,
+        getSessionLocation: (sessionId) => locations.get(sessionId) ?? null,
+        getSessionNode,
+        query: view.hasSessionSearchQuery ? view.normalizedSessionSearchQuery : '',
+      }),
       getSessionLocation: (sessionId) => locations.get(sessionId) ?? null,
       // Timeline rows never expand, and their archive/delete actions resolve
       // descendants from the global cache at action time.
-      getSessionNode: (session) => ({
-        ...buildActiveSessionNode(collection.childrenMap, session),
-        children: [],
-        worktree: locations.get(session.id)?.worktree ?? null,
-      }),
+      getSessionNode,
       query: view.hasSessionSearchQuery ? view.normalizedSessionSearchQuery : '',
     });
-  }, [collection.childrenMap, collection.orderedSessions, collection.rootSessions, ownership.bySessionId, spaceLabelById, timelineMode, topology.availableWorktreesByProject, topology.gitBranches, topology.projectRootBranches, topology.projects, view.hasSessionSearchQuery, view.homeDirectory, view.normalizedSessionSearchQuery]);
+  }, [collection.childrenMap, collection.orderedSessions, collection.rootSessions, ownership.bySessionId, pendingSessionIds, spaceLabelById, timelineMode, topology.availableWorktreesByProject, topology.gitBranches, topology.projectRootBranches, topology.projects, view.hasSessionSearchQuery, view.homeDirectory, view.normalizedSessionSearchQuery]);
 
   // Sessions in work: top-level, unarchived project sessions (Chats are plain
   // conversations and never in work), in the shared lifecycle order.

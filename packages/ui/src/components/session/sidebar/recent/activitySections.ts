@@ -217,24 +217,38 @@ export const deriveRecentActivitySections = ({
 // caller; this projection only applies the search filter and shapes rows.
 export const deriveTimelineActivityItems = ({
   sessions,
+  waitingItems,
   getSessionLocation,
   getSessionNode,
   query,
 }: {
   sessions: readonly Session[];
+  /**
+   * The waiting rows the root-only list cannot hold: a subagent that asked a
+   * question is nobody's root, and a timeline row never expands, so its
+   * request had no row in this list at all while it blocked its family. They
+   * lead the zone, the way waiting rows lead the top zone, so the request is
+   * found without scanning the list — the meta a waiting row carries is its
+   * own project/branch context, resolved by the caller like every other row's.
+   * A session already listed as a root keeps the waiting row, not a second one.
+   */
+  waitingItems?: readonly SidebarActivityItem[];
   getSessionLocation: (sessionId: string) => SidebarSessionLocation | null;
   getSessionNode: (session: Session) => SessionNode;
   query: string;
-}): SidebarActivityItem[] => sessions.flatMap((session) => {
-  if (!matchesSidebarSessionQuery(session, query)) return [];
-  const location = getSessionLocation(session.id);
-  return [{
-    node: getSessionNode(session),
-    projectId: location?.projectId ?? null,
-    groupDirectory: location?.groupDirectory ?? session.directory ?? null,
-    secondaryMeta: {
-      projectLabel: location?.projectLabel ?? null,
-      branchLabel: location?.branchLabel ?? null,
-    },
-  }];
-});
+}): SidebarActivityItem[] => {
+  const items = sessions.flatMap((session) => {
+    if (!matchesSidebarSessionQuery(session, query)) return [];
+    const location = getSessionLocation(session.id);
+    return [{
+      node: getSessionNode(session),
+      projectId: location?.projectId ?? null,
+      groupDirectory: location?.groupDirectory ?? session.directory ?? null,
+      secondaryMeta: {
+        projectLabel: location?.projectLabel ?? null,
+        branchLabel: location?.branchLabel ?? null,
+      },
+    }];
+  });
+  return waitingItems && waitingItems.length > 0 ? mergeActivityItems(waitingItems, items) : items;
+};

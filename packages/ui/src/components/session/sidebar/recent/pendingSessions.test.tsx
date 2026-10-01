@@ -14,6 +14,7 @@ import {
 import {
   derivePendingActivityItems,
   deriveRecentActivitySections,
+  deriveTimelineActivityItems,
   mergeActivityItems,
   selectPendingSessionIds,
   selectPendingSessions,
@@ -65,6 +66,7 @@ const session = (id: string, parentID?: string): Session => ({
 const rowArgs = (
   recentSections: readonly { key: 'active-now'; items: readonly SessionSidebarActivityItem[] }[],
   showRecentSection: boolean,
+  overrides: Partial<SessionSidebarRowModelArgs> = {},
 ): SessionSidebarRowModelArgs => ({
   mode: 'normal',
   sections: [],
@@ -90,6 +92,7 @@ const rowArgs = (
   singleProjectId: null,
   showOnlyMainWorkspace: false,
   hideDirectoryControls: false,
+  ...overrides,
 });
 
 const sessionRowIds = (args: SessionSidebarRowModelArgs): string[] => buildSessionSidebarRowModel(args).rows
@@ -355,5 +358,92 @@ describe('pending sessions in the top zone', () => {
       await act(async () => root.unmount());
       container.remove();
     }
+  });
+
+  // Timeline builds its list from the root sessions alone, and its rows never
+  // expand, so a subsession that asked a question had no row there at all while
+  // it blocked its family. These tests run the projection and the row model the
+  // sidebar runs, then read the badge out of the rendered row.
+  describe('waiting subsessions in the timeline list', () => {
+    // The timeline projection the sidebar builds: the root list plus the
+    // waiting rows that list cannot hold — the same two projections and the
+    // row model as SessionProjectCollection, with the root filter it applies.
+    const timelineItemsFor = (orderedSessions: readonly Session[], roots: readonly Session[]) => {
+      const pendingSessionIds = selectPendingSessionIds(useGlobalBlockingRequestsStore.getState().bySession);
+      const rootIds = new Set(roots.map((entry) => entry.id));
+      const waitingSessions = selectPendingSessions(orderedSessions, pendingSessionIds)
+        .filter((entry) => !rootIds.has(entry.id) && !entry.time?.archived);
+      const getSessionNode = (entry: Session) => ({ session: entry, children: [], worktree: null });
+      return deriveTimelineActivityItems({
+        sessions: roots,
+        waitingItems: derivePendingActivityItems({
+          sessions: waitingSessions, pendingSessionIds, getSessionLocation: () => null, getSessionNode, query: '',
+        }),
+        getSessionLocation: () => null,
+        getSessionNode,
+        query: '',
+      });
+    };
+    const timelineRows = (orderedSessions: readonly Session[], roots: readonly Session[]): readonly SessionSidebarRow[] => (
+      buildSessionSidebarRowModel(rowArgs([], true, {
+        viewMode: 'timeline',
+        timelineItems: timelineItemsFor(orderedSessions, roots),
+      })).rows
+    );
+    const timelineSessionRows = (orderedSessions: readonly Session[], roots: readonly Session[]) => (
+      timelineRows(orderedSessions, roots).flatMap((row) => (row.kind === 'session' ? [row] : []))
+    );
+
+    test('lists a waiting subsession as its own timeline row, carrying its request', async () => {
+      seedGlobalBlockingRequests([
+        { sessionId: 'sub', directory: '/repo', permissions: [permission('p1', 'sub')], forms: [form('q1', 'sub')] },
+      ]);
+      const rootSession = session('root');
+      const subSession = session('sub', 'root');
+      const rows = timelineRows([rootSession, subSession], [rootSession]);
+      const sessionRows = rows.flatMap((row) => (row.kind === 'session' ? [row] : []));
+
+      // The subsession is no root, so the root list never held it; the waiting
+      // row is where its request is answered from, so it has to be listed. It
+      // leads, the way a waiting row leads the top zone, so the request is
+      // found without scanning the list — and it is a flat leaf row, like every
+      // other timeline row.
+      expect(sessionRows.map((row) => row.node.session.id)).toEqual(['sub', 'root']);
+      expect(sessionRows.every((row) => row.renderContext === 'timeline' && row.depth === 0 && row.node.children.length === 0)).toBe(true);
+
+      const container = dom.document.createElement('div') as unknown as HTMLElement;
+      dom.document.body.appendChild(container as never);
+      const reactRoot = createRoot(container);
+
+      try {
+        await act(async () => reactRoot.render(<RealRows rows={rows} />));
+        expect(rowIds(container)).toEqual(['sub', 'root']);
+        expect(badgeNumber(container, 'sub', 'shield')).toBe('1');
+        expect(badgeNumber(container, 'sub', 'question')).toBe('1');
+        expect(badgeNumber(container, 'root', 'shield')).toBeNull();
+        expect(badgeNumber(container, 'root', 'question')).toBeNull();
+      } finally {
+        await act(async () => reactRoot.unmount());
+        container.remove();
+      }
+    });
+
+    test('leaves the timeline rows untouched while nothing waits, so a quiet subsession stays out', () => {
+      const rootSession = session('root');
+      const subSession = session('sub', 'root');
+
+      // The counter-proof: the subsession is in the collection, and it still
+      // gets no row — only a waiting request lifts one.
+      expect(timelineSessionRows([rootSession, subSession], [rootSession]).map((row) => row.node.session.id)).toEqual(['root']);
+    });
+
+    test('keeps one row for a waiting root, as the waiting row replaces its timeline row', () => {
+      seedGlobalBlockingRequests([
+        { sessionId: 'root', directory: '/repo', permissions: [permission('p1', 'root')], forms: [] },
+      ]);
+      const rootSession = session('root');
+
+      expect(timelineSessionRows([rootSession], [rootSession]).map((row) => row.node.session.id)).toEqual(['root']);
+    });
   });
 });
