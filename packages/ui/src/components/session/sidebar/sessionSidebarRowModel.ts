@@ -17,6 +17,12 @@ export type SessionSidebarActivityItem = {
   groupDirectory: string | null;
   secondaryMeta: { projectLabel?: string | null; branchLabel?: string | null } | null;
   getSecondaryMeta?: (sessionId: string) => SessionSidebarActivityItem['secondaryMeta'];
+  /**
+   * The row carries an unanswered question or permission. Pinned rows lead the
+   * `active-now` section and are never dropped by its reveal limit, so a
+   * pending request cannot be paginated out of sight.
+   */
+  pinned?: boolean;
 };
 
 export type SessionSidebarActivityKey = 'work' | 'chats' | 'active-now' | 'timeline';
@@ -668,18 +674,28 @@ export const buildSessionSidebarRowModel = (args: SessionSidebarRowModelArgs): S
     }
   }
 
-  if (!timelineMode && args.showRecentSection) {
+  if (!timelineMode) {
     for (const recentSection of args.recentSections) {
       const section = { ...recentSection, items: recentSection.items.filter((item) => !inWork.has(item.node.session.id)) };
-      if (section.items.length === 0) continue;
+      // Waiting rows are not a preference: they show up even with the Recent
+      // switch off, because a buried request is what this zone exists to
+      // prevent. The switch only controls the plain Recent rows.
+      const items = args.showRecentSection
+        ? section.items
+        : section.items.filter((item) => item.pinned === true);
+      if (items.length === 0) continue;
       const collapsed = appendActivityHeader('active-now');
       if (collapsed) continue;
       const containerKey = `activity:${section.key}`;
       const initialLimit = 7;
       const requested = Math.max(initialLimit, args.visibleCountByContainer.get(containerKey) ?? initialLimit);
-      const sectionEntries = collapseActivityItems(section.items);
-      const visibleItems = search ? sectionEntries : sectionEntries.slice(0, requested);
-      for (const entry of visibleItems) {
+      // Waiting (pinned) rows never spend the reveal budget and are never cut,
+      // so the limit keeps sizing the Recent rows exactly as before.
+      const pinnedItems = items.filter((item) => item.pinned === true);
+      const recentItems = items.filter((item) => item.pinned !== true);
+      const visibleRecentEntries = search ? collapseActivityItems(recentItems) : collapseActivityItems(recentItems).slice(0, requested);
+      const visibleEntries = search ? collapseActivityItems(items) : [...pinnedItems, ...visibleRecentEntries];
+      for (const entry of visibleEntries) {
         if (isActivityRunEntry(entry)) {
           appendActivityRun(entry, containerKey, 'recent', true);
           if (search) searchMatchCount += entry.items.length;
@@ -692,9 +708,9 @@ export const buildSessionSidebarRowModel = (args: SessionSidebarRowModelArgs): S
         appendSessions({ nodes: [item.node], containerKey, projectId: item.projectId, groupDirectory: item.groupDirectory, ownerKey: getSessionFolderOwnerKey(item.projectId, item.groupDirectory), selectionScopeKey: getSessionFolderOwnerKey(item.projectId, item.groupDirectory), archived: false, renderContext: 'recent', secondaryMeta: item.secondaryMeta, getSecondaryMeta: item.getSecondaryMeta, indexedNodes: indexed, selectionPoolOffset });
         if (search) searchMatchCount += 1;
       }
-      const remaining = sectionEntries.length - visibleItems.length;
-      if (!search && remaining > 0) push({ kind: 'show-control', key: `${containerKey}:more`, estimateSize: STATUS_ESTIMATE, control: 'more', containerKey, currentCount: visibleItems.length, increment: 7 });
-      else if (!search && sectionEntries.length > initialLimit) push({ kind: 'show-control', key: `${containerKey}:fewer`, estimateSize: STATUS_ESTIMATE, control: 'fewer', containerKey, currentCount: visibleItems.length, increment: 7 });
+      const remaining = recentItems.length - visibleRecentEntries.length;
+      if (!search && remaining > 0) push({ kind: 'show-control', key: `${containerKey}:more`, estimateSize: STATUS_ESTIMATE, control: 'more', containerKey, currentCount: visibleEntries.length, increment: 7 });
+      else if (!search && recentItems.length > initialLimit) push({ kind: 'show-control', key: `${containerKey}:fewer`, estimateSize: STATUS_ESTIMATE, control: 'fewer', containerKey, currentCount: visibleEntries.length, increment: 7 });
     }
   }
 

@@ -504,4 +504,34 @@ describe('buildSessionSidebarRowModel', () => {
 
     expect(buildSessionSidebarRowModel(input).sessionById.get('hidden')?.id).toBe('hidden');
   });
+
+  test('shows the Recent zone without its switch when it holds a waiting row, and keeps waiting rows past the limit', () => {
+    const waiting = Array.from({ length: 9 }, (_, index) => timelineItem(`waiting-${index}`, { pinned: true }));
+    const recent = Array.from({ length: 10 }, (_, index) => timelineItem(`recent-${index}`));
+    const sessionIds = (input: SessionSidebarRowModelArgs): string[] => buildSessionSidebarRowModel(input).rows
+      .flatMap((row) => (row.kind === 'session' ? [row.node.session.id] : []));
+
+    const switchedOff = args([]);
+    switchedOff.showRecentSection = false;
+    switchedOff.recentSections = [{ key: 'active-now', items: [...waiting, ...recent] }];
+    const offModel = buildSessionSidebarRowModel(switchedOff);
+    expect(offModel.rows[0]).toMatchObject({ kind: 'activity-header', activityKey: 'active-now' });
+    // Every waiting row survives; not one Recent row is shown while the switch is off.
+    expect(sessionIds(switchedOff)).toEqual(waiting.map((item) => item.node.session.id));
+
+    const switchedOn = args([]);
+    switchedOn.showRecentSection = true;
+    switchedOn.recentSections = [{ key: 'active-now', items: [...waiting, ...recent] }];
+    // Pinned rows never spend the reveal budget, so the seven Recent rows still fit below them.
+    expect(sessionIds(switchedOn)).toEqual([
+      ...waiting.map((item) => item.node.session.id),
+      ...recent.slice(0, 7).map((item) => item.node.session.id),
+    ]);
+    expect(buildSessionSidebarRowModel(switchedOn).rows.some((row) => row.kind === 'show-control' && row.control === 'more')).toBe(true);
+
+    const legacy = args([]);
+    legacy.showRecentSection = true;
+    legacy.recentSections = [{ key: 'active-now', items: recent }];
+    expect(sessionIds(legacy)).toEqual(recent.slice(0, 7).map((item) => item.node.session.id));
+  });
 });

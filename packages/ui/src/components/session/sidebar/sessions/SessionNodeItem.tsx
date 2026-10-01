@@ -42,6 +42,7 @@ import { DraggableSessionRow } from '../folders/sessionFolderDnd';
 import { useSessionRowOrderRegistry } from './sessionRowOrder';
 import { canShowSessionWorktreeMenu, getSessionWorktreeMenuDisabled, nodeContainsSessionId, nodeHasPinnedMembershipChange, resolveSessionPrLookupKey, resolveTooltipBranchLabel, selectFormBadgeSessionScopes, selectRowBadgeVisibilityClass } from './sessionNodeItemUtils';
 import { useSessionRowMenuState } from './useSessionRowMenuState';
+import { PendingRequestBadges } from './PendingRequestBadges';
 import type { SessionNode } from '../types';
 import type { SessionSidebarRenderContext } from '../sessionSidebarRowModel';
 import { SessionTimelineRowBody } from './SessionTimelineRowBody';
@@ -910,9 +911,6 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
   }
 
   const pendingPermissionCount = sessionPermissions.length;
-  const pendingFormLabel = pendingFormCount === 1
-    ? t('sessions.sidebar.session.status.questionPendingSingle')
-    : t('sessions.sidebar.session.status.questionPendingMany', { count: pendingFormCount });
   // Actions are permanently visible (with matching permanent padding) only in
   // the non-VSCode alwaysShowActions layout; every other layout hover-reveals
   // them over the row's right edge, where the badges live (#2284).
@@ -1530,18 +1528,7 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
   const rowBadges = (pendingPermissionCount > 0 || pendingFormCount > 0 || badgeDoneHint) ? (
     <>
       {badgeDoneHint ? doneHintBadge() : null}
-      {pendingPermissionCount > 0 ? (
-        <span className="inline-flex flex-shrink-0 items-center gap-1 rounded bg-destructive/10 px-1 py-0.5 text-[0.7rem] text-destructive" title={t('sessions.sidebar.session.status.permissionRequired')} aria-label={t('sessions.sidebar.session.status.permissionRequired')}>
-          <Icon name="shield" className="h-3 w-3" />
-          <span className="leading-none">{pendingPermissionCount}</span>
-        </span>
-      ) : null}
-      {pendingFormCount > 0 ? (
-        <span className="inline-flex flex-shrink-0 items-center gap-1 rounded bg-status-info/10 px-1 py-0.5 text-[0.7rem] text-status-info" title={pendingFormLabel} aria-label={pendingFormLabel}>
-          <Icon name="question" className="h-3 w-3" />
-          <span className="leading-none">{pendingFormCount}</span>
-        </span>
-      ) : null}
+      <PendingRequestBadges permissionCount={pendingPermissionCount} formCount={pendingFormCount} />
     </>
   ) : null;
 
@@ -1821,18 +1808,7 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
                           </span>
                         </div>
                       ) : null}
-                      {pendingPermissionCount > 0 ? (
-                        <span className={cn('inline-flex items-center gap-1 rounded bg-destructive/10 px-1 py-0.5 text-[0.7rem] text-destructive flex-shrink-0', badgeVisibilityClass)} title={t('sessions.sidebar.session.status.permissionRequired')} aria-label={t('sessions.sidebar.session.status.permissionRequired')}>
-                          <Icon name="shield" className="h-3 w-3" />
-                          <span className="leading-none">{pendingPermissionCount}</span>
-                        </span>
-                      ) : null}
-                      {pendingFormCount > 0 ? (
-                        <span className={cn('inline-flex items-center gap-1 rounded bg-status-info/10 px-1 py-0.5 text-[0.7rem] text-status-info flex-shrink-0', badgeVisibilityClass)} title={pendingFormLabel} aria-label={pendingFormLabel}>
-                          <Icon name="question" className="h-3 w-3" />
-                          <span className="leading-none">{pendingFormCount}</span>
-                        </span>
-                      ) : null}
+                      <PendingRequestBadges permissionCount={pendingPermissionCount} formCount={pendingFormCount} className={badgeVisibilityClass} />
                     </div>
                     )}
                   </button>

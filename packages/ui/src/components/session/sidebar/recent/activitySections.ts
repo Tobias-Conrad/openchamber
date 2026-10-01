@@ -1,4 +1,5 @@
 import type { Session } from '@/lib/opencode/model';
+import type { PendingBlockingRequests } from '@/sync/global-blocking-requests';
 import type { SessionNode } from '../types';
 import type { SidebarSessionLocation } from './sessionLocation';
 
@@ -10,6 +11,12 @@ type SidebarActivityItem = {
   groupDirectory: string | null;
   secondaryMeta: { projectLabel?: string | null; branchLabel?: string | null } | null;
   getSecondaryMeta?: (sessionId: string) => SidebarActivityItem['secondaryMeta'];
+  /**
+   * A waiting row: the session holds an unanswered question or permission.
+   * Pinned rows survive the section's reveal limit, so a pending request is
+   * never cut off by "Show more" pagination.
+   */
+  pinned?: boolean;
 };
 
 type RecentActivitySection = {
@@ -96,6 +103,96 @@ const attachRecentWorktrees = (
   return { ...node, worktree, children };
 };
 
+// One projection for every row of the top zone, so Recent rows and waiting rows
+// can never disagree on metadata, worktree attachment, or search matching.
+const toActivityItem = (
+  session: Session,
+  getSessionLocation: (sessionId: string) => RecentSessionLocation | null,
+  getSessionNode: ((session: Session) => SessionNode) | undefined,
+  pinned?: boolean,
+): SidebarActivityItem => {
+  const location = getSessionLocation(session.id);
+  const node = getSessionNode?.(session) ?? { session, children: [], worktree: null };
+  return {
+    node: attachRecentWorktrees(node, getSessionLocation),
+    projectId: location?.projectId ?? null,
+    groupDirectory: location?.groupDirectory ?? session.directory ?? null,
+    secondaryMeta: location ? {
+      projectLabel: location.projectLabel,
+      branchLabel: location.branchLabel,
+    } : null,
+    getSecondaryMeta: (sessionId: string) => {
+      const childLocation = getSessionLocation(sessionId);
+      return childLocation ? {
+        projectLabel: childLocation.projectLabel,
+        branchLabel: childLocation.branchLabel,
+      } : null;
+    },
+    pinned,
+  };
+};
+
+/**
+ * Session ids with an unanswered question or permission. The cross-directory
+ * blocking index is the only source that also covers directories this client
+ * never bootstrapped, which is exactly where a request would otherwise hide.
+ */
+export const selectPendingSessionIds = (
+  bySession: ReadonlyMap<string, PendingBlockingRequests>,
+): ReadonlySet<string> => {
+  const ids = new Set<string>();
+  for (const [sessionId, pending] of bySession) {
+    if (pending.permissions.length > 0 || pending.forms.length > 0) ids.add(sessionId);
+  }
+  return ids;
+};
+
+/**
+ * The waiting sessions themselves, in their incoming (lifecycle) order.
+ * Subtasks count: a request asked by a subagent blocks that family, and the
+ * row carrying the badge has to be the row the question is answered from.
+ */
+export const selectPendingSessions = (
+  sessions: readonly Session[],
+  pendingSessionIds: ReadonlySet<string>,
+): Session[] => sessions.filter((session) => pendingSessionIds.has(session.id));
+
+/**
+ * Waiting sessions as top-zone rows, marked `pinned` so the row model keeps
+ * them ahead of the Recent rows and outside the section's reveal limit.
+ */
+export const derivePendingActivityItems = ({
+  sessions,
+  pendingSessionIds,
+  getSessionLocation,
+  getSessionNode,
+  query,
+}: {
+  sessions: readonly Session[];
+  pendingSessionIds: ReadonlySet<string>;
+  getSessionLocation: (sessionId: string) => RecentSessionLocation | null;
+  getSessionNode?: (session: Session) => SessionNode;
+  query: string;
+}): SidebarActivityItem[] => selectPendingSessions(sessions, pendingSessionIds).flatMap((session) => (
+  matchesSidebarSessionQuery(session, query)
+    ? [toActivityItem(session, getSessionLocation, getSessionNode, true)]
+    : []
+));
+
+/**
+ * Waiting rows first, never twice: a session already lifted by a pending
+ * request keeps its pinned row, and the Recent projection only contributes the
+ * sessions that are not waiting.
+ */
+export const mergeActivityItems = (
+  waiting: readonly SidebarActivityItem[],
+  recent: readonly SidebarActivityItem[],
+): SidebarActivityItem[] => {
+  if (waiting.length === 0) return [...recent];
+  const waitingIds = new Set(waiting.map((item) => item.node.session.id));
+  return [...waiting, ...recent.filter((item) => !waitingIds.has(item.node.session.id))];
+};
+
 export const deriveRecentActivitySections = ({
   sessions,
   getSessionLocation,
@@ -108,27 +205,11 @@ export const deriveRecentActivitySections = ({
   query: string;
 }): RecentActivitySection[] => [{
   key: 'active-now',
-  items: sessions.flatMap((session) => {
-    if (!matchesSidebarSessionQuery(session, query)) return [];
-    const location = getSessionLocation(session.id);
-    const node = getSessionNode?.(session) ?? { session, children: [], worktree: null };
-    return [{
-      node: attachRecentWorktrees(node, getSessionLocation),
-      projectId: location?.projectId ?? null,
-      groupDirectory: location?.groupDirectory ?? session.directory ?? null,
-      secondaryMeta: location ? {
-        projectLabel: location.projectLabel,
-        branchLabel: location.branchLabel,
-      } : null,
-      getSecondaryMeta: (sessionId: string) => {
-        const childLocation = getSessionLocation(sessionId);
-        return childLocation ? {
-          projectLabel: childLocation.projectLabel,
-          branchLabel: childLocation.branchLabel,
-        } : null;
-      },
-    }];
-  }),
+  items: sessions.flatMap((session) => (
+    matchesSidebarSessionQuery(session, query)
+      ? [toActivityItem(session, getSessionLocation, getSessionNode)]
+      : []
+  )),
 }];
 
 // Timeline lists every non-archived root project session as one flat zone.

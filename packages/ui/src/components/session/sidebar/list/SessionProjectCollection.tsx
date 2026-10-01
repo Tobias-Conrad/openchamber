@@ -33,8 +33,9 @@ import type { DeleteSessionConfirmState } from '../sessions/useSessionActions';
 import { useExpandedParents } from '../sessions/useExpandedParents';
 import { getChatsRootForHome, getChatsRootFromDirectory, isChatDirectoryPath } from '@/lib/chatDirectories';
 import { isCapacitorApp } from '@/lib/platform';
-import { deriveRecentActivitySections, deriveTimelineActivityItems, sessionTreeMatchesSidebarQuery } from '../recent/activitySections';
+import { deriveRecentActivitySections, derivePendingActivityItems, deriveTimelineActivityItems, mergeActivityItems, selectPendingSessionIds, selectPendingSessions, sessionTreeMatchesSidebarQuery } from '../recent/activitySections';
 import { resolveSidebarSessionLocations } from '../recent/sessionLocation';
+import { useGlobalBlockingRequestsStore } from '@/sync/global-blocking-requests';
 import { buildSessionSidebarRowModel } from '../sessionSidebarRowModel';
 import { useSidebarGroupStatus } from './useSidebarGroupStatus';
 import { getSessionFolderOwnerKey, getSessionFolderScopes } from '../sessions/sessionFolderIdentity';
@@ -208,6 +209,14 @@ const VisibleSessionProjects: React.FC<SessionProjectCollectionProps> = ({ topol
     }
     return runMembershipRef.current.map;
   }, [runIndex]);
+  // Every directory feeds this cross-directory index and the host seeds it, so
+  // a request in a session that is neither recent nor bootstrapped still lifts
+  // that session into the top zone.
+  const blockingRequestsBySession = useGlobalBlockingRequestsStore((state) => state.bySession);
+  const pendingSessionIds = React.useMemo(
+    () => selectPendingSessionIds(blockingRequestsBySession),
+    [blockingRequestsBySession],
+  );
   const [editingId, setEditingId] = React.useState<string | null>(null);
   const [editingRowKey, setEditingRowKey] = React.useState<string | null>(null);
   const [editTitle, setEditTitle] = React.useState('');
@@ -363,13 +372,38 @@ const VisibleSessionProjects: React.FC<SessionProjectCollectionProps> = ({ topol
       homeDirectory: view.homeDirectory,
       hideBranchMatchingProjectLabel: true,
     });
-    return deriveRecentActivitySections({
+    const recentItems = deriveRecentActivitySections({
       sessions: recentSessions,
       getSessionLocation: (sessionId) => locations.get(sessionId) ?? null,
       getSessionNode: (session) => nodes.get(session.id) ?? buildActiveSessionNode(collection.childrenMap, session),
       query: view.hasSessionSearchQuery ? view.normalizedSessionSearchQuery : '',
+    })[0]?.items ?? [];
+    // Waiting sessions are collected from the cross-directory blocking index.
+    // They lead the zone and are pinned, so neither its order nor its reveal
+    // limit can push a pending request back out of sight.
+    const waitingSessions = selectPendingSessions(collection.orderedSessions, pendingSessionIds);
+    const waitingLocations = waitingSessions.length === 0 ? null : resolveSidebarSessionLocations({
+      sessions: waitingSessions,
+      projects: topology.projects,
+      ownerBySessionId: ownership.bySessionId,
+      spaceLabelById,
+      availableWorktreesByProject: topology.availableWorktreesByProject,
+      gitBranches: topology.gitBranches,
+      homeDirectory: view.homeDirectory,
+      hideBranchMatchingProjectLabel: true,
     });
-  }, [collection.childrenMap, ownership.bySessionId, recentSessions, spaceLabelById, topology.availableWorktreesByProject, topology.gitBranches, topology.projects, view.hasSessionSearchQuery, view.homeDirectory, view.normalizedSessionSearchQuery]);
+    const waitingItems = derivePendingActivityItems({
+      sessions: waitingSessions,
+      pendingSessionIds,
+      getSessionLocation: (sessionId) => waitingLocations?.get(sessionId) ?? null,
+      // A waiting row is a leaf: the row that owns the request is the row it is
+      // answered from, and the subtree stays one click away in the project tree.
+      getSessionNode: (session) => ({ ...buildActiveSessionNode(collection.childrenMap, session), children: [] }),
+      query: view.hasSessionSearchQuery ? view.normalizedSessionSearchQuery : '',
+    });
+    const items = mergeActivityItems(waitingItems, recentItems);
+    return items.length === 0 ? [] : [{ key: 'active-now' as const, items }];
+  }, [collection.childrenMap, collection.orderedSessions, ownership.bySessionId, pendingSessionIds, recentSessions, spaceLabelById, topology.availableWorktreesByProject, topology.gitBranches, topology.projects, view.hasSessionSearchQuery, view.homeDirectory, view.normalizedSessionSearchQuery]);
 
   // Timeline lists the project sessions themselves, in the shared lifecycle
   // order (pinned first), with no project, worktree, or folder structure.
