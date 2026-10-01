@@ -1,12 +1,12 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
+import { Window } from 'happy-dom';
 import React, { act } from 'react';
-import { createRoot } from 'react-dom/client';
-import { renderToStaticMarkup } from 'react-dom/server';
+import { OpenCode } from '@opencode/client';
 import type { Session } from '@/lib/opencode/model';
-import { I18nProvider } from '@/lib/i18n';
 import {
   applyGlobalBlockingRequestEvents,
   resetGlobalBlockingRequests,
+  seedGlobalBlockingRequests,
   useGlobalBlockingRequestsStore,
   type BlockingFormRequest,
   type BlockingPermissionRequest,
@@ -18,8 +18,12 @@ import {
   selectPendingSessionIds,
   selectPendingSessions,
 } from './activitySections';
-import { buildSessionSidebarRowModel, type SessionSidebarActivityItem, type SessionSidebarRowModelArgs } from '../sessionSidebarRowModel';
-import { installHookTestDom } from '../test-utils/testDom';
+import {
+  buildSessionSidebarRowModel,
+  type SessionSidebarActivityItem,
+  type SessionSidebarRow,
+  type SessionSidebarRowModelArgs,
+} from '../sessionSidebarRowModel';
 
 // The sprite-injecting icon is a presentational leaf; the badge assertions care
 // about which badge rendered, so it renders as a marker element here.
@@ -29,8 +33,24 @@ mock.module('@/components/icon/Icon', () => ({
   ),
 }));
 
-const { PendingRequestBadges } = await import('../sessions/PendingRequestBadges');
-const { SessionSidebarActivityHeader } = await import('../sessionSidebarHeaderPresentation');
+// A real DOM: the waiting row is asserted through the markup the component
+// actually produces, not through counters handed to a badge in the test.
+const dom = new Window();
+Object.assign(globalThis, {
+  window: dom,
+  document: dom.document,
+  localStorage: dom.localStorage,
+  HTMLElement: dom.HTMLElement,
+  Element: dom.Element,
+  Event: dom.Event,
+  Node: dom.Node,
+  IS_REACT_ACT_ENVIRONMENT: true,
+});
+
+const { createRoot } = await import('react-dom/client');
+const { I18nProvider } = await import('@/lib/i18n');
+const { SyncProvider, useChildStoreManager } = await import('@/sync/sync-context');
+const { SessionTreeItem } = await import('../sessions/SessionTreeItem');
 
 const permission = (id: string, sessionID: string): BlockingPermissionRequest => ({
   id, sessionID, action: 'bash', resources: ['rm *'],
@@ -168,83 +188,172 @@ describe('pending sessions in the top zone', () => {
     ]);
   });
 
-  test('renders the waiting row as the first zone row with its badge, with the switch off', async () => {
-    const dom = installHookTestDom();
-    const root = createRoot(dom.container);
-    applyGlobalBlockingRequestEvents('/repo', [
-      { type: 'permission.asked', properties: permission('p1', 'waiting') },
-      { type: 'form.created', properties: { form: { ...form('q1', 'asked'), fields: [{ key: 'answer', type: 'boolean' }] } } },
+  test('renders the waiting row as the first zone row, with the switch off', () => {
+    const recentItems = deriveRecentActivitySections({
+      sessions: [session('quiet')], getSessionLocation: () => null, query: '',
+    })[0]?.items ?? [];
+    const waiting = (id: string): SessionSidebarActivityItem => ({
+      node: { session: session(id), children: [], worktree: null },
+      projectId: null, groupDirectory: '/repo', secondaryMeta: null, pinned: true,
+    });
+    const sections = sectionsOf(mergeActivityItems([waiting('asked'), waiting('waiting')], recentItems));
+    const idsOf = (showRecentSection: boolean) => buildSessionSidebarRowModel(rowArgs(sections, showRecentSection)).rows
+      .flatMap((row) => (row.kind === 'session' ? [row.node.session.id] : []));
+
+    // The zone header is rendered although showRecentSection is false, the
+    // waiting rows lead it, and the quiet Recent row only follows them once
+    // the switch is on.
+    expect(buildSessionSidebarRowModel(rowArgs(sections, false)).rows[0])
+      .toMatchObject({ kind: 'activity-header', activityKey: 'active-now' });
+    expect(idsOf(false)).toEqual(['asked', 'waiting']);
+    expect(idsOf(true)).toEqual(['asked', 'waiting', 'quiet']);
+  });
+
+  // The waiting rows are drawn from the cross-directory request index, but the
+  // row itself counted from its own directory store. A directory the client
+  // never opened has no store entry, so the badge stayed invisible although
+  // the row was lifted into the top zone. These tests render the real row and
+  // read the badge out of the markup.
+  const sdk = () => OpenCode.make({
+    baseUrl: 'https://sync.test',
+    fetch: async (request) => {
+      const path = new URL(request instanceof Request ? request.url : request.toString()).pathname;
+      if (path.endsWith('/event')) {
+        return new Response(new ReadableStream(), { headers: { 'content-type': 'text/event-stream' } });
+      }
+      const body = path.endsWith('/location')
+        ? { directory: '/workspace', project: { id: 'project', directory: '/workspace', canonical: '/workspace' } }
+        : path.endsWith('/session/active') ? {} : { data: [] };
+      return new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' } });
+    },
+  });
+  const noop = () => undefined;
+  const noopWorktreeLoad = () => ({ cachedTargets: [], refreshTargets: Promise.resolve([]) });
+  const EMPTY_IDS: Set<string> = new Set();
+
+  // Prop bag the sidebar scroller spreads onto every row, trimmed to what the
+  // row reads here. `renderContext: 'recent'` is what the top zone uses.
+  const RealRow = ({ row }: { row: Extract<SessionSidebarRow, { kind: 'session' }> }) => (
+    <SessionTreeItem
+      node={row.node}
+      depth={row.depth}
+      groupDirectory={row.groupDirectory}
+      projectId={row.projectId}
+      folderOwnerKey={row.ownerKey}
+      selectionScopeKey={row.selectionScopeKey}
+      archivedBucket={row.archived}
+      renderContext={row.renderContext}
+      rowKey={row.key}
+      dragKey={row.key}
+      secondaryMeta={row.secondaryMeta}
+      renderChildren={false}
+      pinnedSessionIds={EMPTY_IDS}
+      expandedParents={EMPTY_IDS}
+      hasSessionSearchQuery={false}
+      normalizedSessionSearchQuery=""
+      notifyOnSubtasks={false}
+      editingId={null}
+      editingRowKey={null}
+      setEditingId={noop}
+      setEditingRowKey={noop}
+      editTitle=""
+      setEditTitle={noop}
+      toggleParent={noop}
+      openSidebarMenuKey={null}
+      setOpenSidebarMenuKey={noop}
+      allowReselect={false}
+      resetSessionSearch={noop}
+      deleteSessionConfirm={null}
+      setDeleteSessionConfirm={noop}
+      startFolderRename={noop}
+      startSessionWorktreeMenuLoad={noopWorktreeLoad}
+      mobileVariant={false}
+      alwaysShowActions={false}
+    />
+  );
+
+  const RealRows = ({ rows, fill }: { rows: readonly SessionSidebarRow[]; fill?: React.ReactNode }) => (
+    <SyncProvider sdk={sdk()} directory="/workspace">
+      <I18nProvider>
+        {fill}
+        {rows.map((row) => (row.kind === 'session' ? <RealRow key={row.key} row={row} /> : null))}
+      </I18nProvider>
+    </SyncProvider>
+  );
+
+  const rowsFor = (sessions: Session[]): readonly SessionSidebarRow[] => {
+    const pendingSessionIds = selectPendingSessionIds(useGlobalBlockingRequestsStore.getState().bySession);
+    const items = mergeActivityItems(
+      derivePendingActivityItems({ sessions, pendingSessionIds, getSessionLocation: () => null, query: '' }),
+      deriveRecentActivitySections({ sessions, getSessionLocation: () => null, query: '' })[0]?.items ?? [],
+    );
+    return buildSessionSidebarRowModel(rowArgs(sectionsOf(items), true)).rows;
+  };
+
+  const rowIds = (container: Element): string[] => Array.from(container.querySelectorAll('[data-session-row]'))
+    .map((element) => element.getAttribute('data-session-row') ?? '');
+  /** Number the badge shows for one row, read from the badge element itself. */
+  const badgeNumber = (container: Element, sessionId: string, icon: 'shield' | 'question'): string | null => {
+    const row = container.querySelector(`[data-session-row="${sessionId}"]`);
+    return row?.querySelector(`[data-icon="${icon}"]`)?.parentElement?.textContent ?? null;
+  };
+
+  test('shows the badge on a waiting row whose directory was never bootstrapped', async () => {
+    // The host seed is how an unopened directory reaches the index.
+    seedGlobalBlockingRequests([
+      { sessionId: 'waiting', directory: '/repo', permissions: [permission('p1', 'waiting')], forms: [form('q1', 'waiting')] },
+      { sessionId: 'asked', directory: '/repo', permissions: [], forms: [form('q2', 'asked')] },
     ]);
     const sessions = [session('quiet'), session('asked'), session('waiting')];
-    let zoneHeaderRow: unknown = null;
-    let idsWithoutRecent: string[] = [];
-    let idsWithRecent: string[] = [];
-    let waitingBadges: Array<{ permissions: number; forms: number }> = [];
+    const rows = rowsFor(sessions);
+    const container = dom.document.createElement('div') as unknown as HTMLElement;
+    dom.document.body.appendChild(container as never);
+    const root = createRoot(container);
 
-    const Harness = () => {
-      const bySession = useGlobalBlockingRequestsStore((state) => state.bySession);
-      const pendingSessionIds = React.useMemo(() => selectPendingSessionIds(bySession), [bySession]);
-      const waitingItems = derivePendingActivityItems({
-        sessions, pendingSessionIds, getSessionLocation: () => null, query: '',
-      });
-      const recentItems = deriveRecentActivitySections({
-        sessions: [session('quiet')], getSessionLocation: () => null, query: '',
-      })[0]?.items ?? [];
-      const sections = sectionsOf(mergeActivityItems(waitingItems, recentItems));
-      const idsOf = (showRecentSection: boolean) => buildSessionSidebarRowModel(rowArgs(sections, showRecentSection)).rows
-        .flatMap((row) => (row.kind === 'session' ? [row.node.session.id] : []));
-      const offModel = buildSessionSidebarRowModel(rowArgs(sections, false));
-      zoneHeaderRow = offModel.rows[0];
-      idsWithoutRecent = idsOf(false);
-      idsWithRecent = idsOf(true);
-      waitingBadges = offModel.rows.flatMap((row) => {
-        if (row.kind !== 'session') return [];
-        const pending = bySession.get(row.node.session.id);
-        return [{ permissions: pending?.permissions.length ?? 0, forms: pending?.forms.length ?? 0 }];
-      });
-      return <>
-        {/* The zone header and its rows are mounted although the Recent switch is off. */}
-        <SessionSidebarActivityHeader
-          activityKey="active-now"
-          collapsed={false}
-          forceExpanded={false}
-          alwaysShowActions={false}
-          onToggle={() => undefined}
-          onNewChat={() => undefined}
-        />
-        {offModel.rows.flatMap((row) => {
-          if (row.kind !== 'session') return [];
-          const pending = bySession.get(row.node.session.id);
-          return [<PendingRequestBadges
-            key={row.key}
-            permissionCount={pending?.permissions.length ?? 0}
-            formCount={pending?.forms.length ?? 0}
-          />];
-        })}
-      </>;
+    try {
+      await act(async () => root.render(<RealRows rows={rows} />));
+
+      // The waiting rows lead the zone, ahead of the Recent row.
+      expect(rowIds(container)).toEqual(['asked', 'waiting', 'quiet']);
+      // And each carries the request its directory store never loaded.
+      expect(badgeNumber(container, 'waiting', 'shield')).toBe('1');
+      expect(badgeNumber(container, 'waiting', 'question')).toBe('1');
+      expect(badgeNumber(container, 'asked', 'question')).toBe('1');
+      expect(badgeNumber(container, 'asked', 'shield')).toBeNull();
+      expect(badgeNumber(container, 'quiet', 'shield')).toBeNull();
+      expect(badgeNumber(container, 'quiet', 'question')).toBeNull();
+    } finally {
+      await act(async () => root.unmount());
+      container.remove();
+    }
+  });
+
+  test('counts a request that both feeds know exactly once', async () => {
+    // Both the directory store and the index hold the same ask. Summing the
+    // two feeds would show "2"; the row must show "1".
+    const ask = permission('p1', 'waiting');
+    seedGlobalBlockingRequests([{ sessionId: 'waiting', directory: '/repo', permissions: [ask], forms: [] }]);
+    const sessions = [session('waiting')];
+    const rows = rowsFor(sessions);
+    const container = dom.document.createElement('div') as unknown as HTMLElement;
+    dom.document.body.appendChild(container as never);
+    const root = createRoot(container);
+
+    // Fill the directory store the way a bootstrapped project row would.
+    const Fill = () => {
+      const manager = useChildStoreManager();
+      React.useLayoutEffect(() => {
+        manager.ensureChild('/repo', { bootstrap: false }).setState({ permission: { waiting: [{ ...ask }] } });
+      }, [manager]);
+      return null;
     };
 
     try {
-      await act(async () => root.render(<I18nProvider><Harness /></I18nProvider>));
-
-      // The zone header is rendered although showRecentSection is false, the
-      // waiting rows lead it, and the quiet Recent row only follows them once
-      // the switch is on.
-      expect(zoneHeaderRow).toMatchObject({ kind: 'activity-header', activityKey: 'active-now' });
-      expect(idsWithoutRecent).toEqual(['asked', 'waiting']);
-      expect(idsWithRecent).toEqual(['asked', 'waiting', 'quiet']);
-      // Each waiting row carries the counts of its own request.
-      expect(waitingBadges).toEqual([{ permissions: 0, forms: 1 }, { permissions: 1, forms: 0 }]);
+      await act(async () => root.render(<RealRows rows={rows} fill={<Fill />} />));
+      expect(badgeNumber(container, 'waiting', 'shield')).toBe('1');
     } finally {
       await act(async () => root.unmount());
-      dom.restore();
+      container.remove();
     }
-
-    const badgeHtml = renderToStaticMarkup(<I18nProvider>
-      <PendingRequestBadges permissionCount={waitingBadges[1]?.permissions ?? 0} formCount={waitingBadges[1]?.forms ?? 0} />
-    </I18nProvider>);
-
-    expect(badgeHtml).toContain('data-icon="shield"');
-    expect(badgeHtml).toContain('Permission required');
   });
 });

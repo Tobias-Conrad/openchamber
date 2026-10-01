@@ -43,6 +43,7 @@ import { useSessionRowOrderRegistry } from './sessionRowOrder';
 import { canShowSessionWorktreeMenu, getSessionWorktreeMenuDisabled, nodeContainsSessionId, nodeHasPinnedMembershipChange, resolveSessionPrLookupKey, resolveTooltipBranchLabel, selectFormBadgeSessionScopes, selectRowBadgeVisibilityClass } from './sessionNodeItemUtils';
 import { useSessionRowMenuState } from './useSessionRowMenuState';
 import { PendingRequestBadges } from './PendingRequestBadges';
+import { useGlobalPendingCounts } from './useGlobalPendingCounts';
 import type { SessionNode } from '../types';
 import type { SessionSidebarRenderContext } from '../sessionSidebarRowModel';
 import { SessionTimelineRowBody } from './SessionTimelineRowBody';
@@ -619,7 +620,23 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
     () => selectFormBadgeSessionScopes(node, isExpanded, sessionDirectory),
     [isExpanded, node, sessionDirectory],
   );
-  const pendingFormCount = useSessionFormCount(formBadgeSessionScopes);
+  const storeFormCount = useSessionFormCount(formBadgeSessionScopes);
+  // The top zone picks its waiting rows out of the cross-directory request
+  // index, but a row counted its badges only in its own directory store — and
+  // that store stays empty for a directory this client never bootstrapped, so
+  // the badge was missing exactly on the rows the zone exists for (#3430).
+  // Both feeds consume the same request events, so the index is a second
+  // measurement of the same requests: the larger of the two is taken, never
+  // their sum, and a request both know can therefore not be counted twice.
+  // The id lists are memoized so the row only re-subscribes when its request
+  // family changes, not on every render.
+  const globalPermissionSessionIds = React.useMemo(() => [session.id], [session.id]);
+  const globalFormSessionIds = React.useMemo(
+    () => formBadgeSessionScopes.flatMap((scope) => scope.sessionIDs),
+    [formBadgeSessionScopes],
+  );
+  const globalPendingCounts = useGlobalPendingCounts(globalPermissionSessionIds, globalFormSessionIds);
+  const pendingFormCount = Math.max(storeFormCount, globalPendingCounts.formCount);
   const isSubtaskSession = Boolean(resolvedSession.parentID);
   const unseenCount = useSessionUnseenCount(session.id);
   const needsAttention = unseenCount > 0 && (!isSubtaskSession || notifyOnSubtasks);
@@ -910,7 +927,10 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
     );
   }
 
-  const pendingPermissionCount = sessionPermissions.length;
+  // The badge shows what either feed knows: the directory store for a bootstrapped
+  // project row, the cross-directory index for a row whose directory was never opened.
+  // A maximum, not a sum — the same request must not count once per feed (#3430).
+  const pendingPermissionCount = Math.max(sessionPermissions.length, globalPendingCounts.permissionCount);
   // Actions are permanently visible (with matching permanent padding) only in
   // the non-VSCode alwaysShowActions layout; every other layout hover-reveals
   // them over the row's right edge, where the badges live (#2284).
