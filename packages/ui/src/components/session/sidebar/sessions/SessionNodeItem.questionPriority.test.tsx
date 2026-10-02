@@ -62,7 +62,14 @@ for (const [name, value] of Object.entries(globals)) {
 
 const { useGlobalSessionStatusStore } = await import('@/sync/global-session-status');
 const { useNotificationStore } = await import('@/sync/notification-store');
+const { getPinnedSessionKey } = await import('@/stores/useSessionPinnedStore');
+const { getRuntimeKey } = await import('@/lib/runtime-switch');
 const { SessionNodeItem } = await import('./SessionNodeItem');
+
+// Pins are keyed by runtime + normalized directory + session id, not by the
+// bare id: the fixture has to build the same key or the row is not pinned at
+// all (which is how the pin assertions below can tell).
+const PINNED_SESSION_KEY = getPinnedSessionKey(getRuntimeKey(), '/workspace', SESSION_ID) ?? SESSION_ID;
 
 const emptyNotificationIndex = () => ({
   session: { unseenCount: {}, unseenHasError: {} },
@@ -92,7 +99,7 @@ const createProps = (): SessionNodeItemProps => ({
   folderOwnerKey: null,
   selectionScopeKey: 'project',
   archivedBucket: false,
-  pinnedSessionIds: new Set([SESSION_ID]),
+  pinnedSessionIds: new Set([PINNED_SESSION_KEY]),
   expandedParents: new Set(),
   hasSessionSearchQuery: false,
   normalizedSessionSearchQuery: '',
@@ -135,6 +142,13 @@ const titleElement = (host: HTMLElement): HTMLElement => {
 const questionMarker = (host: HTMLElement): HTMLElement => {
   const marker = host.querySelector<HTMLElement>('[data-session-question-marker="leading"]');
   if (!marker) throw new Error('leading question marker is missing');
+  return marker;
+};
+
+/** The pin glyph; the label is the one the row sets on it. */
+const pinnedMarker = (host: HTMLElement): HTMLElement => {
+  const marker = host.querySelector<HTMLElement>('[aria-label="Pinned session"]');
+  if (!marker) throw new Error('pin marker is missing');
   return marker;
 };
 
@@ -183,6 +197,19 @@ describe('desktop session row pending question', () => {
     const title = titleElement(host);
     expect(title.compareDocumentPosition(marker) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy();
     expect(marker.compareDocumentPosition(title) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    // The pin retires behind the question instead of disappearing: the row is
+    // pinned AND waiting, and both facts still show. The question badge comes
+    // first in the leading area, the pin right after it.
+    const pin = pinnedMarker(host);
+    expect(host.querySelectorAll('[aria-label="Pinned session"]')).toHaveLength(1);
+    expect(marker.compareDocumentPosition(pin) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(pin.compareDocumentPosition(marker) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy();
+
+    // The question took the slot from the running marker: although the turn
+    // runs, no activity indicator is left anywhere on the row, so the question
+    // cannot be read as "still working" (guard, not the fix itself).
+    expect(host.querySelectorAll('[data-session-activity-indicator]')).toHaveLength(0);
   });
 
   test('shows the question only once, never again in the trailing badges', async () => {
@@ -190,6 +217,9 @@ describe('desktop session row pending question', () => {
 
     expect(host.querySelectorAll('[data-session-question-marker="leading"]')).toHaveLength(1);
     expect(host.querySelectorAll('[aria-label="2 pending questions"]')).toHaveLength(1);
+    // The hook the mobile row uses is now on the desktop trailing badge too
+    // (timeline rows render exactly one, see the timeline test below), so this
+    // zero is a real result instead of a selector that can never match.
     expect(host.querySelectorAll('[data-session-question-badge]')).toHaveLength(0);
 
     // The trailing cluster carries no question badge at all.
@@ -206,9 +236,11 @@ describe('desktop session row pending question', () => {
       </I18nProvider>,
     ));
 
-    // No leading slot exists there, so the question must stay trailing.
+    // No leading slot exists there, so the question must stay trailing — and
+    // exactly once: the row asks the same question once, not twice.
     expect(host.querySelectorAll('[data-session-question-marker="leading"]')).toHaveLength(0);
-    expect(host.querySelectorAll('[aria-label="2 pending questions"]').length).toBeGreaterThan(0);
+    expect(host.querySelectorAll('[aria-label="2 pending questions"]')).toHaveLength(1);
+    expect(host.querySelectorAll('[data-session-question-badge]')).toHaveLength(1);
   });
 
   test('bolds the title while the result is unseen and returns it to normal once read', async () => {

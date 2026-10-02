@@ -193,7 +193,13 @@ const SessionTabItem: React.FC<{
                           its content. */}
                       {isActive ? children : (
                         <div className="flex min-w-0 flex-col justify-center">
-                          <span className="block max-w-full overflow-hidden whitespace-nowrap text-[13px] font-medium leading-4">{title}</span>
+                          <span className={cn(
+                            'block max-w-full overflow-hidden whitespace-nowrap text-[13px] leading-4',
+                            // Weight is the unread signal (the dot carries no hue
+                            // any more), so it belongs to the unread state instead
+                            // of being hard-coded for every tab.
+                            showUnread ? 'font-medium' : 'font-normal',
+                          )}>{title}</span>
                         </div>
                       )}
                     </div>

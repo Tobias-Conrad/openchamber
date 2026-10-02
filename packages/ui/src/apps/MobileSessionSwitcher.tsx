@@ -51,7 +51,13 @@ const SwitcherRow: React.FC<{
       style={{ touchAction: 'manipulation' }}
     >
       <span className="flex min-w-0 flex-1 flex-col">
-        <span className={cn('block truncate typography-ui-label', active ? 'text-primary' : 'text-foreground')}>
+        <span className={cn(
+          'block truncate typography-ui-label',
+          // Unread is weight, never colour: the row's marker is the only other
+          // cue and it carries no status hue for "unseen" (WCAG 1.4.1).
+          showUnreadDot && 'font-medium',
+          active ? 'text-primary' : 'text-foreground',
+        )}>
           {getSessionTitle(session, t('sessions.sidebar.session.untitled'))}
         </span>
         {meta ? (

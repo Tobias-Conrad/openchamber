@@ -195,6 +195,12 @@ const ROW_TEXT_LEFT_PX = ROW_GUTTER_LEFT_PX + 14 + 6;
 // with an open question reserves the extra width before its title. The title
 // keeps its truncation and never slides under the marker.
 const LEADING_QUESTION_RESERVE_PX = 8;
+// A pinned row keeps its pin beside that badge (the question takes the slot, it
+// does not take the pin away), so it reserves the pin and the gap between the
+// two markers on top of the badge's own reserve.
+const LEADING_PIN_SIZE_PX = 12;
+const LEADING_MARKER_GAP_PX = 4;
+const LEADING_QUESTION_PIN_RESERVE_PX = LEADING_QUESTION_RESERVE_PX + LEADING_PIN_SIZE_PX + LEADING_MARKER_GAP_PX;
 
 const cancelScrollAnchorByContainer = new WeakMap<HTMLElement, () => void>();
 
@@ -899,10 +905,12 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
   const pendingFormLabel = pendingFormCount === 1
     ? t('sessions.sidebar.session.status.questionPendingSingle')
     : t('sessions.sidebar.session.status.questionPendingMany', { count: pendingFormCount });
-  // A waiting question owns the leading slot. It outranks the action spinner,
-  // the status marker and the pin, and its amber can no longer be mistaken for a
-  // running turn — that marker is green now. The trailing badge drops the
-  // question half so the same request is never shown twice.
+  // A waiting question owns the leading slot. It outranks the action spinner
+  // and the status marker, and its amber can no longer be mistaken for a
+  // running turn — that marker is green now. The pin does not lose its place to
+  // it: it retires behind the question badge instead (see
+  // `showPinnedBesideQuestion`). The trailing badge drops the question half so
+  // the same request is never shown twice.
   const showLeadingQuestion = pendingFormCount > 0;
   // Actions are permanently visible (with matching permanent padding) only in
   // the non-VSCode alwaysShowActions layout; every other layout hover-reveals
@@ -922,6 +930,10 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
   const showActivityDuration = (isStreaming || showUnreadStatus) && hasActivityDuration;
   const hideLeadingIndicatorOnHover = !alwaysShowActions && hasChildren && (isSessionActionPending || showStatusMarker || isPinnedSession || showLeadingQuestion);
   const showPinnedMarker = isPinnedSession && !isSessionActionPending && !showStatusMarker;
+  // A waiting question takes the leading slot but must not swallow the pin: the
+  // pin steps behind the question badge in the same leading area, so a row that
+  // waits AND is pinned still says both.
+  const showPinnedBesideQuestion = showLeadingQuestion && isPinnedSession;
   const pinnedMarkerContent = (
     <Icon
       name="pushpin"
@@ -955,10 +967,16 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
       className={cn(
         'pointer-events-none absolute top-1/2 inline-flex -translate-y-1/2 items-center justify-center transition-opacity',
         showLeadingQuestion ? 'h-3.5 w-auto min-w-3.5' : 'h-3.5 w-3.5',
+        showPinnedBesideQuestion && 'gap-1',
         hideLeadingIndicatorOnHover ? 'opacity-100 group-hover:opacity-0 group-has-[:focus-visible]:opacity-0' : '',
       )}
     >
-      {showLeadingQuestion ? leadingQuestionBadge : isSessionActionPending ? sessionActionSpinner : showStatusMarker ? statusMarkerContent : showPinnedMarker ? pinnedMarkerContent : null}
+      {showLeadingQuestion ? (
+        <>
+          {leadingQuestionBadge}
+          {showPinnedBesideQuestion ? pinnedMarkerContent : null}
+        </>
+      ) : isSessionActionPending ? sessionActionSpinner : showStatusMarker ? statusMarkerContent : showPinnedMarker ? pinnedMarkerContent : null}
     </span>
   ) : null;
   const hideChevronUntilHover = hasChildren && !alwaysShowActions && (isSessionActionPending || showStatusMarker || isPinnedSession || showLeadingQuestion);
@@ -1507,7 +1525,11 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
         </span>
       ) : null}
       {pendingFormCount > 0 ? (
-        <span className="inline-flex flex-shrink-0 items-center gap-1 rounded bg-status-warning/10 px-1 py-0.5 text-[0.7rem] text-status-warning" title={pendingFormLabel} aria-label={pendingFormLabel}>
+        // The desktop counterpart of the mobile row's question badge: the same
+        // hook the mobile component sets, so a row can be checked for the
+        // question in the trailing cluster (timeline rows keep it here) without
+        // matching the leading marker instead.
+        <span data-session-question-badge="" className="inline-flex flex-shrink-0 items-center gap-1 rounded bg-status-warning/10 px-1 py-0.5 text-[0.7rem] text-status-warning" title={pendingFormLabel} aria-label={pendingFormLabel}>
           <Icon name="question" className="h-3 w-3" />
           <span className="leading-none">{pendingFormCount}</span>
         </span>
@@ -1684,7 +1706,7 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
                 // Content sits 4px further from the row's inner edges than the
                 // gutter itself: timeline rows on both sides, project rows only
                 // on the right (their left edge is the status/chevron gutter).
-                style={{ paddingLeft: isTimelineRow ? ROW_GUTTER_LEFT_PX + 4 : ROW_TEXT_LEFT_PX + depth * ROW_DEPTH_STEP_PX + (showLeadingQuestion ? LEADING_QUESTION_RESERVE_PX : 0) }}
+                style={{ paddingLeft: isTimelineRow ? ROW_GUTTER_LEFT_PX + 4 : ROW_TEXT_LEFT_PX + depth * ROW_DEPTH_STEP_PX + (showLeadingQuestion ? (showPinnedBesideQuestion ? LEADING_QUESTION_PIN_RESERVE_PX : LEADING_QUESTION_RESERVE_PX) : 0) }}
                 className={cn(
                   'group relative my-0.5 flex cursor-pointer items-center rounded-md pr-2.5',
                   isTimelineRow && !isTimelineChatRow ? 'py-1.5' : 'py-1',

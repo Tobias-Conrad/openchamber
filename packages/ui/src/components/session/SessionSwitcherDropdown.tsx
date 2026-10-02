@@ -294,7 +294,12 @@ function SwitcherRow({ session, depth, variant, secondaryMeta, hasChildren, isEx
               {isExpanded ? <Icon name="arrow-down-s" className="h-3.5 w-3.5" /> : <Icon name="arrow-right-s" className="h-3.5 w-3.5" />}
             </span>
           ) : null}
-          <span className="truncate typography-ui-label font-normal leading-tight text-foreground">
+          <span className={cn(
+            'truncate typography-ui-label leading-tight text-foreground',
+            // Unread is weight, never colour: the row's activity marker no
+            // longer paints "unseen", so the title carries that signal.
+            needsAttention ? 'font-medium' : 'font-normal',
+          )}>
             {sessionTitle}
           </span>
         </div>

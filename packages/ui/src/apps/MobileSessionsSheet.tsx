@@ -441,10 +441,12 @@ export const SessionRow: React.FC<{
           <span className="flex items-center gap-2.5">
             {/* An open question outranks every other marker on the row, so it
                 leads the title instead of competing for the trailing slot. It
-                keeps its own blue, which the row's activity marker no longer
-                uses, and stays put even while the row runs, is pinned or has a
-                goal. Only the question half is rendered here; the permission
-                shield stays with the trailing metadata. */}
+                keeps the wait colour — amber (`text-status-warning`), which the
+                row's activity marker never uses: that one is green while the
+                turn runs, and unread is the title's weight (see the title
+                below), not a hue. It stays put even while the row runs, is
+                pinned or has a goal. Only the question half is rendered here;
+                the permission shield stays with the trailing metadata. */}
             <MobileSessionPendingBadges permissionCount={0} formCount={pendingRequests.formCount} />
             <span
               className={cn(

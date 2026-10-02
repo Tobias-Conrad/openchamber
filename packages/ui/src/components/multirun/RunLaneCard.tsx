@@ -147,7 +147,12 @@ export function RunLaneCard({
     >
       <div className="flex min-w-0 items-center gap-2">
         <ProviderLogo providerId={providerID} className="h-4 w-4 shrink-0" />
-        <span className="min-w-0 truncate typography-ui-label font-semibold text-foreground">{modelLabel}</span>
+        <span className={cn(
+          'min-w-0 truncate typography-ui-label text-foreground',
+          // Weight is the unread signal, never colour: the marker beside it
+          // carries no hue for "unseen" (see SessionActivityIndicator).
+          unread ? 'font-medium' : 'font-normal',
+        )}>{modelLabel}</span>
         {variantLabel ? (
           <span className="shrink-0 rounded border border-border px-1 typography-micro text-muted-foreground">{variantLabel}</span>
         ) : null}

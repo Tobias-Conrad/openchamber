@@ -220,7 +220,14 @@ const MobileTimelineRow: React.FC<{
                 onCancel={handlers.onCancelRename}
               />
             ) : (
-              <span className={cn('block min-w-0 truncate typography-ui-label', active ? 'text-primary' : 'text-foreground')}>
+              <span className={cn(
+                'block min-w-0 truncate typography-ui-label',
+                // Unread is weight, never colour: the activity marker carries no
+                // status hue for "unseen", so without the bold title the signal
+                // would be a grey dot and nothing else (WCAG 1.4.1).
+                showUnreadDot && 'font-medium',
+                active ? 'text-primary' : 'text-foreground',
+              )}>
                 {title}
               </span>
             )}
