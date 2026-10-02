@@ -12,10 +12,13 @@ import { cn } from '@/lib/utils';
  */
 export type SessionActivityIndicatorState = 'running' | 'subagent' | 'shell' | 'unread';
 
+// Amber for every kind of "the session is working", green for "there is an
+// unseen result". Blue is deliberately left out: it belongs to the waiting
+// question badge, which must never be mistaken for a running turn.
 const PRESENTATION = {
-  running: { icon: 'circle', colorClass: 'text-status-info', labelKey: 'sessions.sidebar.session.status.active' },
-  subagent: { icon: 'robot', colorClass: 'text-status-info', labelKey: 'sessions.sidebar.session.status.backgroundSubagent' },
-  shell: { icon: 'terminal', colorClass: 'text-status-info', labelKey: 'sessions.sidebar.session.status.backgroundCommand' },
+  running: { icon: 'circle', colorClass: 'text-status-warning', labelKey: 'sessions.sidebar.session.status.active' },
+  subagent: { icon: 'robot', colorClass: 'text-status-warning', labelKey: 'sessions.sidebar.session.status.backgroundSubagent' },
+  shell: { icon: 'terminal', colorClass: 'text-status-warning', labelKey: 'sessions.sidebar.session.status.backgroundCommand' },
   unread: { icon: 'checkbox-circle', colorClass: 'text-status-success', labelKey: 'sessions.sidebar.session.status.unread' },
 } as const satisfies Record<SessionActivityIndicatorState, { icon: IconName; colorClass: string; labelKey: string }>;
 
@@ -47,7 +50,7 @@ export const SessionActivityIndicator: React.FC<{
       data-session-activity-indicator={state}
     >
       {running && animated ? (
-        <Icon name="loader-4" className="activity-spinner h-3 w-3 text-status-info" />
+        <Icon name="loader-4" className="activity-spinner h-3 w-3 text-status-warning" />
       ) : (
         <Icon
           name={presentation.icon}

@@ -297,7 +297,7 @@ const NewSessionIconButton: React.FC<{
   </button>
 );
 
-const SessionRow: React.FC<{
+export const SessionRow: React.FC<{
   session: Session;
   active: boolean;
   indent: number;
@@ -439,6 +439,13 @@ const SessionRow: React.FC<{
       >
         <span className="flex min-w-0 flex-1 flex-col">
           <span className="flex items-center gap-2.5">
+            {/* An open question outranks every other marker on the row, so it
+                leads the title instead of competing for the trailing slot. It
+                keeps its own blue, which the row's activity marker no longer
+                uses, and stays put even while the row runs, is pinned or has a
+                goal. Only the question half is rendered here; the permission
+                shield stays with the trailing metadata. */}
+            <MobileSessionPendingBadges permissionCount={0} formCount={pendingRequests.formCount} />
             <span
               className={cn(
                 'block min-w-0 flex-1 truncate typography-ui-label',
@@ -461,9 +468,10 @@ const SessionRow: React.FC<{
               <Icon name="check" className="size-3.5 shrink-0 text-muted-foreground" aria-label={t('sessions.sidebar.session.work.doneSuggested')} />
             ) : null}
             {/* Goal and waiting requests sit before the time, so the time
-                column stays aligned from row to row. */}
+                column stays aligned from row to row. The question half now
+                leads the title, so only the permission shield remains here. */}
             <MobileSessionGoalGlyph session={session} />
-            <MobileSessionPendingBadges {...pendingRequests} />
+            <MobileSessionPendingBadges permissionCount={pendingRequests.permissionCount} formCount={0} />
             {/* The elapsed turn takes the time slot while it matters, then
                 hands it back to the relative timestamp. */}
             {showActivityDuration ? (

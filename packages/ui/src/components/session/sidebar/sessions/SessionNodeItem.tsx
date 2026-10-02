@@ -191,6 +191,10 @@ type SessionRefLine = {
 const ROW_GUTTER_LEFT_PX = 6;
 const ROW_DEPTH_STEP_PX = 14;
 const ROW_TEXT_LEFT_PX = ROW_GUTTER_LEFT_PX + 14 + 6;
+// The waiting-question marker is wider than the icon-wide marker slot, so a row
+// with an open question reserves the extra width before its title. The title
+// keeps its truncation and never slides under the marker.
+const LEADING_QUESTION_RESERVE_PX = 8;
 
 const cancelScrollAnchorByContainer = new WeakMap<HTMLElement, () => void>();
 
@@ -895,6 +899,11 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
   const pendingFormLabel = pendingFormCount === 1
     ? t('sessions.sidebar.session.status.questionPendingSingle')
     : t('sessions.sidebar.session.status.questionPendingMany', { count: pendingFormCount });
+  // A waiting question owns the leading slot. It outranks the action spinner,
+  // the status marker and the pin, and its blue can no longer be mistaken for a
+  // running turn — that marker is amber now. The trailing badge drops the
+  // question half so the same request is never shown twice.
+  const showLeadingQuestion = pendingFormCount > 0;
   // Actions are permanently visible (with matching permanent padding) only in
   // the non-VSCode alwaysShowActions layout; every other layout hover-reveals
   // them over the row's right edge, where the badges live (#2284).
@@ -911,7 +920,7 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
   // The settled duration lives exactly as long as the unread marker does, so a
   // session read (or watched) while it finishes never keeps a stale total.
   const showActivityDuration = (isStreaming || showUnreadStatus) && hasActivityDuration;
-  const hideLeadingIndicatorOnHover = !alwaysShowActions && hasChildren && (isSessionActionPending || showStatusMarker || isPinnedSession);
+  const hideLeadingIndicatorOnHover = !alwaysShowActions && hasChildren && (isSessionActionPending || showStatusMarker || isPinnedSession || showLeadingQuestion);
   const showPinnedMarker = isPinnedSession && !isSessionActionPending && !showStatusMarker;
   const pinnedMarkerContent = (
     <Icon
@@ -927,18 +936,32 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
       aria-label={isAiRenaming ? t('sessions.aiRename.generating') : t('sessions.sidebar.session.status.movingToWorktree')}
     />
   );
-  const leadingIndicators = isSessionActionPending || showStatusMarker || showPinnedMarker ? (
+  // The marker slot is icon-wide; a waiting question is a touch wider (icon +
+  // count), so its row reserves that extra width for the title below.
+  const leadingQuestionBadge = (
+    <span
+      data-session-question-marker="leading"
+      className="inline-flex h-3.5 items-center justify-center gap-0.5 rounded bg-status-info/10 text-[0.65rem] font-medium text-status-info"
+      title={pendingFormLabel}
+      aria-label={pendingFormLabel}
+    >
+      <Icon name="question" className="h-3 w-3" />
+      <span className="leading-none tabular-nums">{pendingFormCount}</span>
+    </span>
+  );
+  const leadingIndicators = showLeadingQuestion || isSessionActionPending || showStatusMarker || showPinnedMarker ? (
     <span
       style={{ left: ROW_GUTTER_LEFT_PX + depth * ROW_DEPTH_STEP_PX }}
       className={cn(
-        'pointer-events-none absolute top-1/2 inline-flex h-3.5 w-3.5 -translate-y-1/2 items-center justify-center transition-opacity',
+        'pointer-events-none absolute top-1/2 inline-flex -translate-y-1/2 items-center justify-center transition-opacity',
+        showLeadingQuestion ? 'h-3.5 w-auto min-w-3.5' : 'h-3.5 w-3.5',
         hideLeadingIndicatorOnHover ? 'opacity-100 group-hover:opacity-0 group-has-[:focus-visible]:opacity-0' : '',
       )}
     >
-      {isSessionActionPending ? sessionActionSpinner : showStatusMarker ? statusMarkerContent : showPinnedMarker ? pinnedMarkerContent : null}
+      {showLeadingQuestion ? leadingQuestionBadge : isSessionActionPending ? sessionActionSpinner : showStatusMarker ? statusMarkerContent : showPinnedMarker ? pinnedMarkerContent : null}
     </span>
   ) : null;
-  const hideChevronUntilHover = hasChildren && !alwaysShowActions && (isSessionActionPending || showStatusMarker || isPinnedSession);
+  const hideChevronUntilHover = hasChildren && !alwaysShowActions && (isSessionActionPending || showStatusMarker || isPinnedSession || showLeadingQuestion);
   const subsessionChevron = hasChildren ? (
     <span
       role="button"
@@ -1471,6 +1494,9 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
   ) : null);
   // Timeline rows carry the done hint in their first line instead.
   const badgeDoneHint = !isTimelineRow && showDoneHint;
+  // Timeline rows have no leading slot, so their question stays in the trailing
+  // badges; the project/recent rows below move it to the leading slot instead
+  // (see `leadingQuestionBadge`), where it is not repeated.
   const rowBadges = (pendingPermissionCount > 0 || pendingFormCount > 0 || badgeDoneHint) ? (
     <>
       {badgeDoneHint ? doneHintBadge() : null}
@@ -1652,7 +1678,7 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
                 // Content sits 4px further from the row's inner edges than the
                 // gutter itself: timeline rows on both sides, project rows only
                 // on the right (their left edge is the status/chevron gutter).
-                style={{ paddingLeft: isTimelineRow ? ROW_GUTTER_LEFT_PX + 4 : ROW_TEXT_LEFT_PX + depth * ROW_DEPTH_STEP_PX }}
+                style={{ paddingLeft: isTimelineRow ? ROW_GUTTER_LEFT_PX + 4 : ROW_TEXT_LEFT_PX + depth * ROW_DEPTH_STEP_PX + (showLeadingQuestion ? LEADING_QUESTION_RESERVE_PX : 0) }}
                 className={cn(
                   'group relative my-0.5 flex cursor-pointer items-center rounded-md pr-2.5',
                   isTimelineRow && !isTimelineChatRow ? 'py-1.5' : 'py-1',
@@ -1785,12 +1811,6 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
                         <span className={cn('inline-flex items-center gap-1 rounded bg-destructive/10 px-1 py-0.5 text-[0.7rem] text-destructive flex-shrink-0', badgeVisibilityClass)} title={t('sessions.sidebar.session.status.permissionRequired')} aria-label={t('sessions.sidebar.session.status.permissionRequired')}>
                           <Icon name="shield" className="h-3 w-3" />
                           <span className="leading-none">{pendingPermissionCount}</span>
-                        </span>
-                      ) : null}
-                      {pendingFormCount > 0 ? (
-                        <span className={cn('inline-flex items-center gap-1 rounded bg-status-info/10 px-1 py-0.5 text-[0.7rem] text-status-info flex-shrink-0', badgeVisibilityClass)} title={pendingFormLabel} aria-label={pendingFormLabel}>
-                          <Icon name="question" className="h-3 w-3" />
-                          <span className="leading-none">{pendingFormCount}</span>
                         </span>
                       ) : null}
                     </div>
