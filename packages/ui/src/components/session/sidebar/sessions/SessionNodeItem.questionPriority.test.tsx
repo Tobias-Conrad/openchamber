@@ -9,17 +9,19 @@ import type { SessionNodeItemProps } from './SessionNodeItem';
 import type { SessionNode } from '../types';
 
 const SESSION_ID = 'ses_desktop-question-priority';
+const CHILD_ID = 'ses_desktop-question-priority-child';
 const TITLE = 'Desktop question priority row';
 
-// The row's decision inputs, pinned so the test is about the marker slot, not
-// about the sync store: two questions are waiting.
+// The row's decision inputs. The per-directory form store stays empty on
+// purpose: these tests are about the cross-directory index the row must read
+// instead, so a directory store that knows nothing must still show the badge.
 mock.module('@/sync/sync-context', () => ({
   setActiveSession: () => undefined,
   useChildStoreManager: () => null,
   useDirectoryStore: () => null,
   useGlobalSessionStatus: () => null,
   useSessionPermissions: () => [],
-  useSessionFormCount: () => 2,
+  useSessionFormCount: () => 0,
   useSyncSDK: () => null,
   useSyncDirectory: () => null,
   buildSessionMessageRecordsSnapshot: () => [],
@@ -62,9 +64,26 @@ for (const [name, value] of Object.entries(globals)) {
 
 const { useGlobalSessionStatusStore } = await import('@/sync/global-session-status');
 const { useNotificationStore } = await import('@/sync/notification-store');
+const { seedGlobalBlockingRequests, resetGlobalBlockingRequests } = await import('@/sync/global-blocking-requests');
 const { getPinnedSessionKey } = await import('@/stores/useSessionPinnedStore');
 const { getRuntimeKey } = await import('@/lib/runtime-switch');
 const { SessionNodeItem } = await import('./SessionNodeItem');
+
+// The exact reproduction: the host seed knows about a form in a directory this
+// client never bootstrapped, so no per-directory store carries it. Only the
+// cross-directory index does.
+const seedQuestion = (sessionId: string, count = 1) => {
+  seedGlobalBlockingRequests([{
+    sessionId,
+    directory: '/directory-never-opened',
+    permissions: [],
+    forms: Array.from({ length: count }, (_, index) => ({
+      id: `${sessionId}-form-${index}`,
+      sessionID: sessionId,
+      title: 'Question',
+    })),
+  }]);
+};
 
 // Pins are keyed by runtime + normalized directory + session id, not by the
 // bare id: the fixture has to build the same key or the row is not pinned at
@@ -90,6 +109,15 @@ const session = {
 } as Session;
 
 const node = { session, children: [], worktree: null } satisfies SessionNode;
+
+// Collapsed parent fixture: the form lives on the child, and the parent row
+// must roll it up while the child row is hidden.
+const childSession = { ...session, id: CHILD_ID, parentID: SESSION_ID, title: 'Hidden child' } as Session;
+const parentNode = {
+  session,
+  children: [{ session: childSession, children: [], worktree: null }],
+  worktree: null,
+} satisfies SessionNode;
 
 const createProps = (): SessionNodeItemProps => ({
   node,
@@ -159,6 +187,7 @@ describe('desktop session row pending question', () => {
   beforeEach(() => {
     useGlobalSessionStatusStore.setState({ activeSessionIds: new Set() });
     useNotificationStore.setState({ list: [], index: emptyNotificationIndex() });
+    resetGlobalBlockingRequests();
     host = document.createElement('div');
     document.body.append(host);
     root = createRoot(host);
@@ -169,6 +198,7 @@ describe('desktop session row pending question', () => {
     host.remove();
     useGlobalSessionStatusStore.setState({ activeSessionIds: new Set() });
     useNotificationStore.setState({ list: [], index: emptyNotificationIndex() });
+    resetGlobalBlockingRequests();
   });
 
   const renderRow = async () => {
@@ -179,9 +209,21 @@ describe('desktop session row pending question', () => {
     ));
   };
 
+  test('reads the waiting question from the cross-directory index, not the empty directory store', async () => {
+    // The per-directory store mock returns zero pending forms; the question
+    // exists only in the cross-directory index. This is the reproduced bug: the
+    // row showed no badge at all because it asked the store instead.
+    seedQuestion(SESSION_ID, 1);
+    await renderRow();
+
+    expect(host.querySelectorAll('[data-session-question-marker="leading"]')).toHaveLength(1);
+    expect(questionMarker(host).getAttribute('aria-label')).toBe('1 pending question');
+  });
+
   test('the waiting question takes the leading slot although the row is pinned and running', async () => {
     // Running and pinned are both active; the question must still win.
     useGlobalSessionStatusStore.setState({ activeSessionIds: new Set([SESSION_ID]) });
+    seedQuestion(SESSION_ID, 2);
     await renderRow();
 
     expect(host.querySelectorAll('[data-session-question-marker="leading"]')).toHaveLength(1);
@@ -212,7 +254,36 @@ describe('desktop session row pending question', () => {
     expect(host.querySelectorAll('[data-session-activity-indicator]')).toHaveLength(0);
   });
 
+  test('a collapsed parent rolls up a hidden descendant question from the global index', async () => {
+    // Only the child waits; the parent row is collapsed (empty expandedParents),
+    // so the child itself is not rendered. The parent must still show it.
+    seedQuestion(CHILD_ID, 1);
+    await act(async () => root.render(
+      <I18nProvider>
+        <SessionNodeItem {...createProps()} node={parentNode} />
+      </I18nProvider>,
+    ));
+
+    expect(host.querySelectorAll('[data-session-question-marker="leading"]')).toHaveLength(1);
+    expect(questionMarker(host).getAttribute('aria-label')).toBe('1 pending question');
+  });
+
+  test('an expanded parent leaves the hidden-descendant question to the child row', async () => {
+    seedQuestion(CHILD_ID, 1);
+    const expansionKey = `project:active:${SESSION_ID}`;
+    await act(async () => root.render(
+      <I18nProvider>
+        <SessionNodeItem {...createProps()} node={parentNode} expandedParents={new Set([expansionKey])} />
+      </I18nProvider>,
+    ));
+
+    // The parent no longer stands for the child; the marker belongs to the
+    // child's own row (which this test does not mount).
+    expect(host.querySelectorAll('[data-session-question-marker="leading"]')).toHaveLength(0);
+  });
+
   test('shows the question only once, never again in the trailing badges', async () => {
+    seedQuestion(SESSION_ID, 2);
     await renderRow();
 
     expect(host.querySelectorAll('[data-session-question-marker="leading"]')).toHaveLength(1);
@@ -230,6 +301,7 @@ describe('desktop session row pending question', () => {
   });
 
   test('keeps the question badge on timeline rows, which have no leading slot', async () => {
+    seedQuestion(SESSION_ID, 2);
     await act(async () => root.render(
       <I18nProvider>
         <SessionNodeItem {...createProps()} renderContext="timeline" alwaysShowActions />

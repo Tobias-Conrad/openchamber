@@ -33,7 +33,8 @@ import { runGuestSessionAction } from '@/lib/guests/session-action';
 import { SessionAiRenameMenuItem } from '@/components/session/SessionAiRenameMenuItem';
 import { handleSessionRenameKeyDown } from '@/components/session/sessionRenameKeyboard';
 import { useIsSessionAiRenamePending } from '@/sync/use-session-ai-rename';
-import { useSessionPermissions, useSessionFormCount } from '@/sync/sync-context';
+import { useSessionPermissions } from '@/sync/sync-context';
+import { usePendingRequestCounts } from '@/apps/usePendingRequestCounts';
 import { usePrefetchSessionMessages, useSessionMessageRecordsForExport } from '@/sync/use-sync';
 import { getSyncSessionMaterializationStatus } from '@/sync/sync-refs';
 import { useViewportStore, viewportSessionKey } from '@/sync/viewport-store';
@@ -590,11 +591,19 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
   // expand the other. Matches the format of menuInstanceKey.
   const expansionKey = legacyContextKey;
   const isExpanded = hasSessionSearchQuery ? true : expandedParents.has(expansionKey);
-  const formBadgeSessionScopes = React.useMemo(
-    () => selectFormBadgeSessionScopes(node, isExpanded, sessionDirectory),
+  // The pending question is read from the cross-directory blocking-request
+  // index — the same authority the tray and the mobile rows use — not from the
+  // per-directory store. The store only knows directories this client
+  // bootstrapped, so a session in a directory that was never opened (worktree,
+  // subtask, any project the phone never opened) showed no badge at all. The
+  // scopes still decide which sessions roll into the row: its own, plus a
+  // collapsed subtree's hidden descendants.
+  const questionBadgeSessionIds = React.useMemo(
+    () => selectFormBadgeSessionScopes(node, isExpanded, sessionDirectory)
+      .flatMap((scope) => scope.sessionIDs),
     [isExpanded, node, sessionDirectory],
   );
-  const pendingFormCount = useSessionFormCount(formBadgeSessionScopes);
+  const pendingFormCount = usePendingRequestCounts(questionBadgeSessionIds).formCount;
   const isSubtaskSession = Boolean(resolvedSession.parentID);
   const unseenCount = useSessionUnseenCount(session.id);
   const needsAttention = unseenCount > 0 && (!isSubtaskSession || notifyOnSubtasks);
