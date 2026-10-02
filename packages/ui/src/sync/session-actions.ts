@@ -961,7 +961,19 @@ export async function createSession(
       effectiveDirectory,
     )
 
-    if (getRuntimeKey() !== runtimeKey || opencodeClient.getSdkClient() !== runtimeClient) return null
+    // The session already exists on the server at this point, so a runtime
+    // change must not be reported as a failed creation. Returning `null` here
+    // told the caller "nothing was created" and it tried again, leaving the
+    // first session behind as an orphan and creating a duplicate with the same
+    // first prompt a moment later.
+    //
+    // The stores are still skipped after a switch: session IDs are not unique
+    // across runtimes, so publishing this row into the current runtime's
+    // directory, routing, and global stores could overwrite an unrelated
+    // session that happens to share the ID. The created session is returned
+    // uncommitted instead, which keeps the caller from creating a second one;
+    // the next authoritative load reconciles the stores.
+    if (getRuntimeKey() !== runtimeKey || opencodeClient.getSdkClient() !== runtimeClient) return session
     const sessionDirectory = session.directory || effectiveDirectory || null
     // Pre-populate routing index so SSE events arriving before session.created
     // can be routed to the correct child store

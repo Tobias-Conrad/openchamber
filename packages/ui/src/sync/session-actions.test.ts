@@ -19,6 +19,8 @@ let sessionForkError: Error | null = null
 let beforeSessionForkResolve: (() => void) | null = null
 const selectedSessions: Array<{ sessionId: string | null; directoryHint?: string | null }> = []
 let beforeSessionDeleteResolve: ((sessionId: string) => void) | null = null
+// Lets a test switch runtime while a session create is in flight.
+let beforeSessionCreateResolve: (() => void) | null = null
 // Lets a test switch runtime while a session read is in flight.
 let beforeSessionGetResolve: (() => void) | null = null
 const sessionMoveErrorsById = new Map<string, Error>()
@@ -49,6 +51,7 @@ const movedSessionDirectories: Array<{ sessionID: string; directory: string }> =
 const globalArchivedSessions: Session[] = []
 let runtimeKey = "default-runtime"
 const AMBIGUOUS_TRANSPORT_FAILURE = Symbol("ambiguous-transport-failure")
+const sdkClientStub = {}
 
 const notFound = (kind: string) => Object.assign(new Error(`${kind}NotFoundError`), { status: 404 })
 
@@ -56,6 +59,9 @@ mock.module("@/lib/opencode/client", () => ({
   ascendingId: (prefix: string) => `${prefix}_${(idCounter += 1).toString(16).padStart(12, "0")}`,
   opencodeClient: {
     getDirectory: () => "/test/project",
+    // Stable identity for the runtime client: a test that wants the "runtime
+    // changed" guard to fire switches the runtime key, not this reference.
+    getSdkClient: () => sdkClientStub,
     getActiveSessionStatuses: mock((directory?: string | null) => readActiveStatusSnapshot(directory)),
     getSession: mock(async (sessionId: string, directory?: string | null): Promise<Session> => {
       replyCalls.push({ method: "session.get", params: { sessionID: sessionId, directory } })
@@ -74,6 +80,9 @@ mock.module("@/lib/opencode/client", () => ({
     }),
     createSession: mock(async (params: Record<string, unknown>, directory?: string | null): Promise<Session> => {
       replyCalls.push({ method: "session.create", params: { ...params, directory } })
+      // Lets a test switch runtime while the create is in flight, so the action
+      // observes the change only after the server has already created the row.
+      beforeSessionCreateResolve?.()
       return sessionRecords.get("created") ?? ({ id: "created" } as Session)
     }),
     deleteSession: mock(async (sessionId: string, directory?: string | null) => {
@@ -183,6 +192,7 @@ mock.module("./session-ui-store", () => ({
         selectedSessions.push({ sessionId, directoryHint })
       },
       setWorktreeMetadata: () => {},
+      markSessionAsOpenChamberCreated: () => {},
       setSessionDirectory: (sessionID: string, directory: string) => {
         movedSessionDirectories.push({ sessionID, directory })
       },
@@ -296,6 +306,7 @@ mock.module("./session-message-loader", () => ({
     ensure: async () => {},
     refreshTail: async () => {},
     getSnapshot: () => ({ status: "ready" as const }),
+    initializeCreatedSession: () => {},
   }),
 }))
 
@@ -812,6 +823,63 @@ describe("confirmed session removal", () => {
 
     expect(result).toEqual({ archivedIds: ["session-a", "session-b"], failedIds: [] })
     expect(source.getState().session).toEqual([])
+  })
+})
+
+describe("createSession runtime switch", () => {
+  beforeEach(() => {
+    replyCalls.length = 0
+    registeredSessionDirectories.length = 0
+    globalUpsertedSessions.length = 0
+    selectedSessions.length = 0
+    sessionRecords.clear()
+    runtimeKey = "default-runtime"
+    beforeSessionCreateResolve = null
+  })
+
+  afterEach(() => {
+    beforeSessionCreateResolve = null
+  })
+
+  test("commits the created session while the runtime is stable", async () => {
+    const created = sessionFixture("created")
+    sessionRecords.set("created", created)
+    const source = createStore({})
+    const { createSession, setActionRefs } = await import("./session-actions")
+    setActionRefs(createChildStores([["/test/project", source]]), () => "/test/project")
+
+    expect(await createSession("New session", "/test/project")).toEqual(created)
+    expect(source.getState().session.map((item) => item.id)).toEqual(["created"])
+    expect(globalUpsertedSessions).toEqual([created])
+    expect(registeredSessionDirectories).toEqual([{ sessionID: "created", directory: "/test/project" }])
+    expect(selectedSessions).toEqual([{ sessionId: "created", directoryHint: "/test/project" }])
+  })
+
+  test("returns the already-created session instead of null after a runtime switch", async () => {
+    const created = sessionFixture("created")
+    sessionRecords.set("created", created)
+    const { getRuntimeKey, switchRuntimeEndpoint } = await import("../lib/runtime-switch")
+    switchRuntimeEndpoint({ apiBaseUrl: "http://create-runtime-a.test", runtimeKey: "create-runtime-a" })
+    // The server answers the create while the endpoint switches underneath it.
+    // The row now exists, so reporting failure here is what made the caller try
+    // again and leave this session behind as an orphan.
+    beforeSessionCreateResolve = () => {
+      switchRuntimeEndpoint({ apiBaseUrl: "http://create-runtime-b.test", runtimeKey: "create-runtime-b" })
+    }
+    const source = createStore({})
+    const { createSession, setActionRefs } = await import("./session-actions")
+    setActionRefs(createChildStores([["/test/project", source]]), () => "/test/project")
+
+    expect(await createSession("New session", "/test/project")).toBe(created)
+    // The switch really happened, so the assertions below cover the stale path.
+    expect(getRuntimeKey()).toBe("create-runtime-b")
+    expect(replyCalls.filter((call) => call.method === "session.create")).toHaveLength(1)
+    // Session IDs are not unique across runtimes, so the row is returned
+    // uncommitted rather than published into the new runtime's stores.
+    expect(source.getState().session).toEqual([])
+    expect(registeredSessionDirectories).toEqual([])
+    expect(globalUpsertedSessions).toEqual([])
+    expect(selectedSessions).toEqual([])
   })
 })
 
