@@ -13,8 +13,9 @@ const TICK_MS = 1000;
 
 /**
  * Elapsed time of a session's current turn, or of the turn that just finished.
- * Colored to match the row's status dot in each state, so the pair reads as one
- * indicator rather than two.
+ * While the turn runs it wears the row's status dot color, so the pair reads as
+ * one indicator rather than two; once settled it drops to the neutral row color
+ * and lets the unread weight and icon carry that state instead.
  *
  * Deliberately a leaf. The tick re-renders this span alone rather than the
  * session row around it, which is what makes a live counter cheaper than the
@@ -44,9 +45,12 @@ export const SessionActivityDuration: React.FC<{
     <span
       className={cn(
         'shrink-0 tabular-nums',
-        // The readout wears its dot's color, so the row reads as one signal:
-        // primary while the turn runs, info once it is waiting to be read.
-        running ? 'text-[var(--status-info)]' : 'text-[var(--status-success)]',
+        // Green while the turn runs, matching the row's status dot. Once the
+        // turn has settled the value rests in the neutral row color: with the
+        // unread state now carried by weight and icon, this readout has no
+        // color of its own to wear — hue marks the process state only, never
+        // the unread state (WCAG 1.4.1).
+        running ? 'text-[var(--status-success)]' : 'text-muted-foreground',
         className,
       )}
       aria-label={description}

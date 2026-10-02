@@ -115,7 +115,10 @@ export const SessionTimelineRowBody: React.FC<Props> = ({
   </span>;
   if (compact) {
     return <div className="relative flex w-full min-w-0 items-center gap-1">
-      <div className={cn('min-w-0 flex-1 truncate typography-ui-label font-normal', titleClassName)}>{title}</div>
+      {/* The weight is not fixed here: `titleClassName` carries it (the caller
+          bolds the title for an unread row), and `cn` lets the passed value
+          win. Unweighted callers fall back to the app's regular body weight. */}
+      <div className={cn('min-w-0 flex-1 truncate typography-ui-label', titleClassName)}>{title}</div>
       {meta}
     </div>;
   }
@@ -129,7 +132,9 @@ export const SessionTimelineRowBody: React.FC<Props> = ({
       ) : null}
       {meta}
     </div>
-    <div className={cn('w-full min-w-0 truncate typography-ui-label font-normal', titleClassName)}>{title}</div>
+    {/* Weight comes from `titleClassName` (unread rows are bold, read rows
+        regular), so no `font-normal` here to fight the caller. */}
+    <div className={cn('w-full min-w-0 truncate typography-ui-label', titleClassName)}>{title}</div>
     {hasThirdLine ? (
       <div className="flex w-full min-w-0 items-center gap-1">
         {thirdLineLead ?? (branchLabel ? (

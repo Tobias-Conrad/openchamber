@@ -25,7 +25,7 @@ export function CollapsedActivityIndicator({
       : t('sessions.sidebar.session.status.questionPending');
     return (
       <span
-        className={cn('inline-flex shrink-0 items-center', state === 'permission' ? 'text-destructive' : 'text-status-info', className)}
+        className={cn('inline-flex shrink-0 items-center', state === 'permission' ? 'text-destructive' : 'text-status-warning', className)}
         aria-label={label}
         title={label}
       >

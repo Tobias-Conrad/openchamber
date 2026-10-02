@@ -79,19 +79,24 @@ describe('SessionActivityIndicator', () => {
     expect(indicator?.getAttribute('title')).toBe('Command running in the background');
   });
 
-  test('paints every running kind amber so blue stays reserved for waiting questions', async () => {
+  test('paints every running kind green and leaves unread colour-neutral', async () => {
     useSessionDisplayStore.setState({ animatedActivityIndicators: false });
 
     for (const state of ['running', 'subagent', 'shell'] as const) {
       await renderIndicator({ state });
       const icon = host.querySelector('svg');
-      expect(icon?.classList).toContain('text-status-warning');
+      expect(icon?.classList).toContain('text-status-success');
+      expect(icon?.classList).not.toContain('text-status-warning');
       expect(icon?.classList).not.toContain('text-status-info');
     }
     await renderIndicator({ state: 'unread' });
     const unreadIcon = host.querySelector('svg');
-    expect(unreadIcon?.classList).toContain('text-status-success');
+    expect(unreadIcon?.classList).toContain('text-muted-foreground');
+    expect(unreadIcon?.classList).not.toContain('text-status-success');
     expect(unreadIcon?.classList).not.toContain('text-status-warning');
+    expect(unreadIcon?.classList).not.toContain('text-status-info');
+    // The icon stays, so the unread information never rests on colour alone.
+    expect(iconHref('unread')).toBe('#oc-checkbox-circle');
   });
 
   test('applies running-only classes to running kinds, never to unread', async () => {
@@ -119,7 +124,8 @@ describe('SessionActivityIndicator', () => {
     useSessionDisplayStore.setState({ animatedActivityIndicators: false });
     await renderIndicator({ state: 'running' });
     await act(async () => useSessionDisplayStore.getState().setAnimatedActivityIndicators(true));
-    expect(host.querySelector('.activity-spinner')?.classList).toContain('text-status-warning');
+    expect(host.querySelector('.activity-spinner')?.classList).toContain('text-status-success');
+    expect(host.querySelector('.activity-spinner')?.classList).not.toContain('text-status-warning');
     expect(host.querySelector('.activity-spinner')?.classList).not.toContain('text-status-info');
     await act(async () => useSessionDisplayStore.getState().setAnimatedActivityIndicators(false));
     expect(host.querySelector('.activity-spinner')).toBeNull();

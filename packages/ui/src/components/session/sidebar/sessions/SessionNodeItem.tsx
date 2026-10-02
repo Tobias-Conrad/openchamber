@@ -900,8 +900,8 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
     ? t('sessions.sidebar.session.status.questionPendingSingle')
     : t('sessions.sidebar.session.status.questionPendingMany', { count: pendingFormCount });
   // A waiting question owns the leading slot. It outranks the action spinner,
-  // the status marker and the pin, and its blue can no longer be mistaken for a
-  // running turn — that marker is amber now. The trailing badge drops the
+  // the status marker and the pin, and its amber can no longer be mistaken for a
+  // running turn — that marker is green now. The trailing badge drops the
   // question half so the same request is never shown twice.
   const showLeadingQuestion = pendingFormCount > 0;
   // Actions are permanently visible (with matching permanent padding) only in
@@ -941,7 +941,7 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
   const leadingQuestionBadge = (
     <span
       data-session-question-marker="leading"
-      className="inline-flex h-3.5 items-center justify-center gap-0.5 rounded bg-status-info/10 text-[0.65rem] font-medium text-status-info"
+      className="inline-flex h-3.5 items-center justify-center gap-0.5 rounded bg-status-warning/10 text-[0.65rem] font-medium text-status-warning"
       title={pendingFormLabel}
       aria-label={pendingFormLabel}
     >
@@ -1507,7 +1507,7 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
         </span>
       ) : null}
       {pendingFormCount > 0 ? (
-        <span className="inline-flex flex-shrink-0 items-center gap-1 rounded bg-status-info/10 px-1 py-0.5 text-[0.7rem] text-status-info" title={pendingFormLabel} aria-label={pendingFormLabel}>
+        <span className="inline-flex flex-shrink-0 items-center gap-1 rounded bg-status-warning/10 px-1 py-0.5 text-[0.7rem] text-status-warning" title={pendingFormLabel} aria-label={pendingFormLabel}>
           <Icon name="question" className="h-3 w-3" />
           <span className="leading-none">{pendingFormCount}</span>
         </span>
@@ -1562,9 +1562,15 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
       project={timelineProject}
       projectLabel={tooltipProjectLabel}
       title={renderHighlightedText(sessionTitle, normalizedSessionSearchQuery)}
-      titleClassName={isActive || isRowSelected
-        ? 'text-interactive-selection-foreground'
-        : needsAttention ? 'text-foreground' : 'text-foreground/80'}
+      titleClassName={cn(
+        isActive || isRowSelected
+          ? 'text-interactive-selection-foreground'
+          : needsAttention ? 'text-foreground' : 'text-foreground/80',
+        // Timeline rows carry the same unread signal as the project and recent
+        // rows: the weight bolds, the colour never changes for "unseen". Both
+        // weights are explicit because the row body no longer hard-codes one.
+        needsAttention ? 'font-medium' : 'font-normal',
+      )}
       branchLabel={tooltipBranchLabel}
       statusDot={isSessionActionPending ? sessionActionSpinner : showStatusMarker ? statusMarkerContent : null}
       pinnedMarker={isPinnedSession && !isSessionActionPending ? pinnedMarkerContent : null}
@@ -1722,10 +1728,11 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
                   >
                     {isTimelineRow ? timelineRowBody : (
                     <div className="flex w-full items-center min-w-0 flex-1 gap-1 overflow-hidden">
-                      {/* Unread emphasis is color-only: a font-weight change
-                          would reflow the truncated title and cause a micro
-                          horizontal shift when the status flips. */}
-                      <div className={cn('block min-w-0 flex-1 truncate typography-ui-label font-normal', isActive || isRowSelected ? 'text-interactive-selection-foreground' : needsAttention ? 'text-foreground' : 'text-foreground/80')}>{renderHighlightedText(sessionTitle, normalizedSessionSearchQuery)}</div>
+                      {/* Unread is weight, not colour: the bold title plus the
+                          row's own icon say "unseen" while the colour stays
+                          neutral, so the signal never rests on colour alone
+                          (WCAG 1.4.1) and never doubles as a status tone. */}
+                      <div className={cn('block min-w-0 flex-1 truncate typography-ui-label', needsAttention ? 'font-medium' : 'font-normal', isActive || isRowSelected ? 'text-interactive-selection-foreground' : needsAttention ? 'text-foreground' : 'text-foreground/80')}>{renderHighlightedText(sessionTitle, normalizedSessionSearchQuery)}</div>
                       {!archivedBucket && sessionDirectory && renderContext === 'recent' ? (
                         <DirectoryActionIndicator
                           directory={sessionDirectory}

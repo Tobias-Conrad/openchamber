@@ -61,7 +61,13 @@ for (const [name, value] of Object.entries(globals)) {
 }
 
 const { useGlobalSessionStatusStore } = await import('@/sync/global-session-status');
+const { useNotificationStore } = await import('@/sync/notification-store');
 const { SessionNodeItem } = await import('./SessionNodeItem');
+
+const emptyNotificationIndex = () => ({
+  session: { unseenCount: {}, unseenHasError: {} },
+  project: { unseenCount: {}, unseenHasError: {} },
+});
 
 const noop = () => undefined;
 
@@ -138,6 +144,7 @@ describe('desktop session row pending question', () => {
 
   beforeEach(() => {
     useGlobalSessionStatusStore.setState({ activeSessionIds: new Set() });
+    useNotificationStore.setState({ list: [], index: emptyNotificationIndex() });
     host = document.createElement('div');
     document.body.append(host);
     root = createRoot(host);
@@ -147,6 +154,7 @@ describe('desktop session row pending question', () => {
     await act(async () => root.unmount());
     host.remove();
     useGlobalSessionStatusStore.setState({ activeSessionIds: new Set() });
+    useNotificationStore.setState({ list: [], index: emptyNotificationIndex() });
   });
 
   const renderRow = async () => {
@@ -165,9 +173,11 @@ describe('desktop session row pending question', () => {
     expect(host.querySelectorAll('[data-session-question-marker="leading"]')).toHaveLength(1);
     const marker = questionMarker(host);
     expect(marker.getAttribute('aria-label')).toBe('2 pending questions');
-    // Blue stays the question's colour, never amber.
-    expect(marker.classList.contains('text-status-info')).toBe(true);
-    expect(marker.classList.contains('text-status-warning')).toBe(false);
+    // The waiting question is amber and carries no other status tone, so it can
+    // never be read as a running (green) turn.
+    expect(marker.classList.contains('text-status-warning')).toBe(true);
+    expect(marker.classList.contains('text-status-info')).toBe(false);
+    expect(marker.classList.contains('text-status-success')).toBe(false);
 
     // It leads the title.
     const title = titleElement(host);
@@ -199,5 +209,56 @@ describe('desktop session row pending question', () => {
     // No leading slot exists there, so the question must stay trailing.
     expect(host.querySelectorAll('[data-session-question-marker="leading"]')).toHaveLength(0);
     expect(host.querySelectorAll('[aria-label="2 pending questions"]').length).toBeGreaterThan(0);
+  });
+
+  test('bolds the title while the result is unseen and returns it to normal once read', async () => {
+    const titleClasses = (): DOMTokenList => titleElement(host).classList;
+
+    await renderRow();
+    expect(titleClasses().contains('font-normal')).toBe(true);
+    expect(titleClasses().contains('font-medium')).toBe(false);
+
+    // A turn finished and was never seen: weight, not colour, marks it.
+    await act(async () => useNotificationStore.getState().append({
+      type: 'turn-complete',
+      session: SESSION_ID,
+      time: Date.now(),
+      viewed: false,
+    }));
+    expect(titleClasses().contains('font-medium')).toBe(true);
+    expect(titleClasses().contains('font-normal')).toBe(false);
+
+    // Reading the session drops the emphasis again.
+    await act(async () => useNotificationStore.getState().markSessionViewed(SESSION_ID));
+    expect(titleClasses().contains('font-normal')).toBe(true);
+    expect(titleClasses().contains('font-medium')).toBe(false);
+  });
+
+  test('bolds the timeline row title while the result is unseen, like the project row', async () => {
+    // The timeline row renders through SessionTimelineRowBody, whose title
+    // weight is owned by the caller. Before the fix its title stayed
+    // `font-normal`, so the unread assertion below fails red.
+    await act(async () => root.render(
+      <I18nProvider>
+        <SessionNodeItem {...createProps()} renderContext="timeline" alwaysShowActions />
+      </I18nProvider>,
+    ));
+
+    const titleClasses = (): DOMTokenList => titleElement(host).classList;
+    expect(titleClasses().contains('font-normal')).toBe(true);
+    expect(titleClasses().contains('font-medium')).toBe(false);
+
+    await act(async () => useNotificationStore.getState().append({
+      type: 'turn-complete',
+      session: SESSION_ID,
+      time: Date.now(),
+      viewed: false,
+    }));
+    expect(titleClasses().contains('font-medium')).toBe(true);
+    expect(titleClasses().contains('font-normal')).toBe(false);
+
+    await act(async () => useNotificationStore.getState().markSessionViewed(SESSION_ID));
+    expect(titleClasses().contains('font-normal')).toBe(true);
+    expect(titleClasses().contains('font-medium')).toBe(false);
   });
 });

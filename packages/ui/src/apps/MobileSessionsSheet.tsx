@@ -449,6 +449,10 @@ export const SessionRow: React.FC<{
             <span
               className={cn(
                 'block min-w-0 flex-1 truncate typography-ui-label',
+                // Unread is weight plus the dot, never colour: the tone stays
+                // the row's own, so "unseen" and "status" cannot be confused
+                // (WCAG 1.4.1).
+                showUnreadDot && 'font-medium',
                 active ? 'text-primary' : 'text-foreground',
               )}
             >

@@ -135,6 +135,12 @@ describe('mobile session row pending question', () => {
     const badge = questionBadge(host);
     expect(badge.getAttribute('aria-label')).toBe('2 pending questions');
 
+    // The leading question badge is amber, matching the desktop leading marker,
+    // so it is never mistaken for a running (green) turn.
+    expect(badge.classList.contains('text-status-warning')).toBe(true);
+    expect(badge.classList.contains('text-status-info')).toBe(false);
+    expect(badge.classList.contains('text-status-success')).toBe(false);
+
     // The question sits before the title, not squeezed into the trailing
     // metadata cluster.
     const title = titleElement(host);

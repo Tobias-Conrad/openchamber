@@ -26,9 +26,9 @@ export const MobileSessionGoalGlyph: React.FC<{ session: Session }> = ({ session
 
 /**
  * The permission and question badges the desktop sidebar shows. The mobile row
- * renders the two halves separately: the question badge (blue) leads the title
- * so an open question can never be squeezed off, while the permission shield
- * stays with the trailing metadata.
+ * renders the two halves separately: the question badge (amber, matching the
+ * desktop leading marker) leads the title so an open question can never be
+ * squeezed off, while the permission shield stays with the trailing metadata.
  */
 export const MobileSessionPendingBadges: React.FC<PendingRequestCounts> = ({ permissionCount, formCount }) => {
   const { t } = useI18n();
@@ -50,7 +50,7 @@ export const MobileSessionPendingBadges: React.FC<PendingRequestCounts> = ({ per
       {formCount > 0 ? (
         <span
           data-session-question-badge=""
-          className="inline-flex shrink-0 items-center gap-1 rounded bg-status-info/10 px-1 py-0.5 text-[0.7rem] text-status-info"
+          className="inline-flex shrink-0 items-center gap-1 rounded bg-status-warning/10 px-1 py-0.5 text-[0.7rem] text-status-warning"
           aria-label={formLabel}
         >
           <Icon name="question" className="size-3" />
