@@ -855,14 +855,16 @@ describe("createSession runtime switch", () => {
     expect(selectedSessions).toEqual([{ sessionId: "created", directoryHint: "/test/project" }])
   })
 
-  test("returns the already-created session instead of null after a runtime switch", async () => {
+  test("reports failure instead of publishing a session created across a runtime switch", async () => {
     const created = sessionFixture("created")
     sessionRecords.set("created", created)
     const { getRuntimeKey, switchRuntimeEndpoint } = await import("../lib/runtime-switch")
     switchRuntimeEndpoint({ apiBaseUrl: "http://create-runtime-a.test", runtimeKey: "create-runtime-a" })
     // The server answers the create while the endpoint switches underneath it.
-    // The row now exists, so reporting failure here is what made the caller try
-    // again and leave this session behind as an orphan.
+    // The row belongs to the runtime that was just replaced: publishing it into
+    // the new runtime would risk overwriting an unrelated session that shares
+    // the ID (IDs are not unique across runtimes), so the create is reported as
+    // not-having-happened and the next authoritative load reconciles.
     beforeSessionCreateResolve = () => {
       switchRuntimeEndpoint({ apiBaseUrl: "http://create-runtime-b.test", runtimeKey: "create-runtime-b" })
     }
@@ -870,12 +872,12 @@ describe("createSession runtime switch", () => {
     const { createSession, setActionRefs } = await import("./session-actions")
     setActionRefs(createChildStores([["/test/project", source]]), () => "/test/project")
 
-    expect(await createSession("New session", "/test/project")).toBe(created)
+    expect(await createSession("New session", "/test/project")).toBeNull()
     // The switch really happened, so the assertions below cover the stale path.
     expect(getRuntimeKey()).toBe("create-runtime-b")
+    // The session was created on the server exactly once; nothing is published
+    // into the new runtime's stores.
     expect(replyCalls.filter((call) => call.method === "session.create")).toHaveLength(1)
-    // Session IDs are not unique across runtimes, so the row is returned
-    // uncommitted rather than published into the new runtime's stores.
     expect(source.getState().session).toEqual([])
     expect(registeredSessionDirectories).toEqual([])
     expect(globalUpsertedSessions).toEqual([])
