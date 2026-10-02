@@ -212,6 +212,7 @@ export const dict: Record<I18nKey, string> = {
   'mobile.sessions.viewMode.timeline': '时间线',
   'mobile.sessions.section.chats': '聊天',
   'mobile.sessions.section.recent': '最近',
+  'mobile.sessions.section.waiting': '等待你回复',
   'mobile.sessions.empty.noProjectsTitle': '暂无项目',
   'mobile.sessions.empty.noProjectsDescription': '添加项目以开始与代码对话。',
   'mobile.sessions.empty.noSessionsTitle': '暂无会话',

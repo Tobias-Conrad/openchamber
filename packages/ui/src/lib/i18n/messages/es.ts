@@ -212,6 +212,7 @@ export const dict: Record<I18nKey, string> = {
   "mobile.sessions.viewMode.timeline": "Cronología",
   "mobile.sessions.section.chats": "Chats",
   "mobile.sessions.section.recent": "Recientes",
+  "mobile.sessions.section.waiting": "Esperando por ti",
   "mobile.sessions.empty.noProjectsTitle": "Sin proyectos",
   "mobile.sessions.empty.noProjectsDescription": "Agrega un proyecto para empezar a chatear con tu código.",
   "mobile.sessions.empty.noSessionsTitle": "Sin sesiones",

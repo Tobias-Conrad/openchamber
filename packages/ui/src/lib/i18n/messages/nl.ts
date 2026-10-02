@@ -208,6 +208,7 @@ export const dict = {
   'mobile.sessions.section.projects': 'Projecten',
   'mobile.sessions.section.chats': 'Chats',
   'mobile.sessions.section.recent': 'Recent',
+  'mobile.sessions.section.waiting': 'Wacht op jou',
   'mobile.sessions.viewMode.label': 'Weergave',
   'mobile.sessions.viewMode.projects': 'Gegroepeerd',
   'mobile.sessions.viewMode.timeline': 'Tijdlijn',

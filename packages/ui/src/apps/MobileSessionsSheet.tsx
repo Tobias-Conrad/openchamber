@@ -116,7 +116,9 @@ import type { SessionNode } from '@/components/session/sidebar/types';
 import { buildMultiRunIndex, type MultiRunSummary } from '@/lib/multirun/runs';
 import { MobileRunProviderLogos } from './MobileRunProviderLogos';
 import { MobileSessionGoalGlyph, MobileSessionPendingBadges } from './MobileSessionStateBadges';
+import { collectPendingSessionIds, selectWaitingSessions } from './mobileWaitingSessions';
 import { usePendingRequestCounts } from './usePendingRequestCounts';
+import { useGlobalBlockingRequestsStore } from '@/sync/global-blocking-requests';
 
 type MobileSessionsSheetProps = {
   open: boolean;
@@ -545,6 +547,59 @@ export const SessionRow: React.FC<{
     >
       {rowContent}
     </MobileSwipeActionsRow>
+  );
+};
+
+/**
+ * The "Waiting for you" block that leads the mobile list. It exists because a
+ * waiting session is the one thing in this list that must not be searched for:
+ * it renders above Chats, In work and the projects, in both view modes and
+ * above the search results, and it disappears entirely when nothing waits.
+ *
+ * The rows are the ordinary `SessionRow`, and the sessions stay in their
+ * project as well — the block lifts them up, it does not move them out, so the
+ * project's own ordering and counts never change. Each row keeps the waiting
+ * badge because the sheet hands it `descendantIdsOf`: a collapsed tree counts
+ * its hidden subsessions here just as it does in place.
+ */
+export const MobileWaitingSessionsSection: React.FC<{
+  /** Already collected, ordered and search-filtered (see selectWaitingSessions). */
+  sessions: readonly Session[];
+  activeSessionId: string | null;
+  /** "Project · branch" under the title, the same subtitle search results use. */
+  contextLabelOf: (session: Session) => string;
+  onSelect: (session: Session) => void;
+  descendantIdsOf: (sessionId: string) => readonly string[];
+}> = ({ sessions, activeSessionId, contextLabelOf, onSelect, descendantIdsOf }) => {
+  const { t } = useI18n();
+  if (sessions.length === 0) return null;
+  return (
+    <section data-mobile-waiting-zone="">
+      <div className="flex min-h-12 w-full items-center gap-2 px-3 py-1.5 text-left">
+        <span className="flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-status-warning/10 text-status-warning">
+          <Icon name="question" className="size-4" />
+        </span>
+        <span className="block min-w-0 flex-1 truncate typography-ui-label font-semibold text-foreground">
+          {t('mobile.sessions.section.waiting')}
+        </span>
+        <span className="shrink-0 typography-micro text-muted-foreground tabular-nums">
+          {sessions.length}
+        </span>
+      </div>
+      <div className="pb-2">
+        {sessions.map((session) => (
+          <SessionRow
+            key={session.id}
+            session={session}
+            active={activeSessionId === session.id}
+            indent={PROJECT_SESSION_INDENT}
+            contextLabel={contextLabelOf(session)}
+            onSelect={() => onSelect(session)}
+            descendantIdsOf={descendantIdsOf}
+          />
+        ))}
+      </div>
+    </section>
   );
 };
 
@@ -1003,6 +1058,17 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
     [childrenBySessionId],
   );
 
+  // Waiting sessions lead the list. The ids come from the cross-directory
+  // blocking index — the same one the row badges read, so a question from a
+  // project this phone never opened still reaches the top. Nothing is fetched
+  // here and no new state is kept: the index is the existing source, and the
+  // block is a projection of it.
+  const blockingRequestsBySession = useGlobalBlockingRequestsStore((state) => state.bySession);
+  const pendingSessionIds = React.useMemo(
+    () => collectPendingSessionIds(blockingRequestsBySession),
+    [blockingRequestsBySession],
+  );
+
   // Managed Chats (sessions under ~/.config/openchamber/chats) are not owned
   // by any registered project; they get their own section above the project
   // tree, the same split the desktop sidebar makes. Temporary /btw forks are
@@ -1163,6 +1229,26 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
   );
 
   const normalizedQuery = query.trim().toLowerCase();
+
+  /** The project label a session's search fields carry — the same flat search uses. */
+  const projectLabelFor = React.useCallback((session: Session): string => {
+    const owner = sessionOwnership.bySessionId.get(session.id);
+    return owner ? projectsMeta.find((candidate) => candidate.id === owner.projectId)?.label ?? '' : '';
+  }, [projectsMeta, sessionOwnership]);
+
+  // The leading block's members and order. It searches with the same predicate
+  // the rest of the list uses, so an active query narrows the block too instead
+  // of leaving stale rows above filtered results.
+  const waitingSessions = React.useMemo(() => selectWaitingSessions({
+    sessions,
+    pendingSessionIds,
+    descendantIdsOf,
+    pinnedSessionIds,
+    sessionOrderRanks,
+    matchesQuery: normalizedQuery
+      ? (session) => sessionMatchesQuery(session, projectLabelFor(session), normalizedQuery)
+      : undefined,
+  }), [descendantIdsOf, normalizedQuery, pendingSessionIds, pinnedSessionIds, projectLabelFor, sessionOrderRanks, sessions]);
 
   // On open, bring the current session (or at least its project) into view —
   // the list keeps its scroll position between opens, so a long project list
@@ -1829,6 +1915,20 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
               clearLabel={t('mobile.sessions.clearSearchAria')}
             />
           </div>
+          {/* The waiting block leads every view — grouped, timeline and search
+              results alike — and is hidden only in reorder mode, which is about
+              project order rather than about sessions. An active query filters
+              it (see waitingSessions), so it never shows a row the search below
+              would not. */}
+          {editingOrder ? null : (
+            <MobileWaitingSessionsSection
+              sessions={waitingSessions}
+              activeSessionId={currentSessionId}
+              contextLabelOf={buildSessionContextLabel}
+              onSelect={handleSelectSession}
+              descendantIdsOf={descendantIdsOf}
+            />
+          )}
           {projectsMeta.length === 0 && chatSessions.length === 0 ? (
             <MobileSessionsEmpty
               title={t('mobile.sessions.empty.noProjectsTitle')}
