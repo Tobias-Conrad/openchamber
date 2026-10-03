@@ -1,4 +1,4 @@
-import { readAuthFile } from '../../opencode/auth.js';
+import { readOpenCodeCredentials } from '../../opencode/auth.js';
 import {
   getAuthEntry,
   normalizeAuthEntry,
@@ -13,14 +13,13 @@ export const providerName = 'DeepInfra';
 const aliases = ['deepinfra', 'deep-infra', 'deep_infra'];
 const DEEPINFRA_ME_URL = 'https://api.deepinfra.com/v1/me?checklist=true';
 
-export const isConfigured = () => {
-  const auth = readAuthFile();
+export const isConfigured = (auth) => {
   const entry = normalizeAuthEntry(getAuthEntry(auth, aliases));
   return Boolean(entry?.key || entry?.token);
 };
 
-export const fetchQuota = async () => {
-  const auth = readAuthFile();
+export const fetchQuota = async ({ readCredentials = readOpenCodeCredentials } = {}) => {
+  const auth = await readCredentials();
   const entry = normalizeAuthEntry(getAuthEntry(auth, aliases));
   const apiKey = entry?.key ?? entry?.token;
 
@@ -62,7 +61,9 @@ export const fetchQuota = async () => {
     // Documented at https://docs.deepinfra.com/api-reference/account/me:
     // checklist.stripe_balance is negative when funds are ready to spend and
     // positive when money is owed, so the spendable credit is its negation.
-    const stripeBalance = toNumber(payload?.checklist?.stripe_balance);
+    const rawBalance = payload?.checklist?.stripe_balance;
+    // A blank or absent balance is missing data, not a $0.00 balance.
+    const stripeBalance = String(rawBalance ?? '').trim() === '' ? null : toNumber(rawBalance);
 
     if (stripeBalance === null) {
       return buildResult({

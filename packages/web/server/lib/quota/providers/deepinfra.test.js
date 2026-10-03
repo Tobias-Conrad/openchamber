@@ -1,10 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('../../opencode/auth.js', () => ({
-  readAuthFile: () => ({ deepinfra: { type: 'api', key: 'test-token' } }),
-}));
+import { fetchQuota as fetchDeepinfraQuota } from './deepinfra.js';
 
-import { fetchQuota } from './deepinfra.js';
+const readCredentials = async () => ({ deepinfra: { type: 'api', key: 'test-token' } });
+const fetchQuota = () => fetchDeepinfraQuota({ readCredentials });
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -55,6 +54,17 @@ describe('DeepInfra quota provider', () => {
 
     expect(result.ok).toBe(true);
     expect(result.usage.windows.credits_balance.valueLabel).toBe('$0.00');
+  });
+
+  it('treats a blank balance as missing data, not as $0.00', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(mockResponse({
+      checklist: { stripe_balance: '' },
+    })));
+
+    const result = await fetchQuota();
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe('No quota data in response');
   });
 
   it('renders money owed (positive stripe_balance) as a negative balance', async () => {

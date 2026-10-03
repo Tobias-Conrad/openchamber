@@ -3047,7 +3047,9 @@ const fetchDeepinfraQuota = async ({ readAuth = readOpenCodeCredentials }: Deepi
     // Documented at https://docs.deepinfra.com/api-reference/account/me:
     // checklist.stripe_balance is negative when funds are ready to spend and
     // positive when money is owed, so the spendable credit is its negation.
-    const stripeBalance = toNumber(payload?.checklist?.stripe_balance);
+    const rawBalance = payload?.checklist?.stripe_balance;
+    // A blank or absent balance is missing data, not a $0.00 balance.
+    const stripeBalance = String(rawBalance ?? '').trim() === '' ? null : toNumber(rawBalance);
 
     if (stripeBalance === null) {
       return buildResult({
