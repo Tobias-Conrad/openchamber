@@ -3043,6 +3043,8 @@ const fetchDeepinfraQuota = async ({ readAuth = readOpenCodeCredentials }: Deepi
       });
     }
 
+    // SAFETY: every DeepinfraPayload field is optional and the balance is parsed
+    // below, so an unexpected body ends as "No quota data in response".
     const payload = await response.json() as DeepinfraPayload;
     // Documented at https://docs.deepinfra.com/api-reference/account/me:
     // checklist.stripe_balance is negative when funds are ready to spend and
@@ -3063,7 +3065,7 @@ const fetchDeepinfraQuota = async ({ readAuth = readOpenCodeCredentials }: Deepi
 
     const availableCredits = -stripeBalance;
     const symbol = availableCredits < 0 ? '-$' : '$';
-    const windows: Record<string, UsageWindow> = {
+    const windows = {
       credits_balance: toUsageWindow({
         usedPercent: null,
         windowSeconds: null,
