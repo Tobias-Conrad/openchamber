@@ -1030,6 +1030,15 @@ complete modelID may match only one catalog entry; ambiguous IDs stay unknown.
 Runtime pricing, limits, capabilities, identity, and name are never borrowed
 through this fallback.
 
+A catalog entry also describes an exact hit, but its price never overrides a
+price the runtime knows: the card quotes the runtime's untiered cost, because
+that is the number a session is charged, and a config layer can move it away
+from the catalog (OpenChamber writes a provider's campaign price there, see
+`packages/web/server/lib/quota/DOCUMENTATION.md`). An all-zero runtime cost
+counts as "no price known", so a model only the catalog prices keeps the
+catalog's number. Name, knowledge, release date and the limit fallback stay
+the catalog's.
+
 ### Why custom-model matching stays exact
 
 Display names, family, and stripped prefixes or suffixes do not establish
