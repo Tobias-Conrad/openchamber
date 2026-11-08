@@ -4,7 +4,7 @@ vi.mock('../../opencode/auth.js', () => ({
   readOpenCodeCredentials: async () => ({ deepseek: { key: 'test-token' } }),
 }));
 
-import { fetchQuota } from './deepseek.js';
+import { fetchPrices, fetchQuota, isPeak } from './deepseek.js';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -179,5 +179,87 @@ describe('DeepSeek quota provider', () => {
 
     expect(result.ok).toBe(true);
     expect(result.usage.windows.credits_balance.valueLabel).toBe('$0.00');
+  });
+});
+
+// DeepSeek publishes 0.15 / 0.60 / 0.003 per million for deepseek-flash as the
+// off-peak price, and models.dev carries exactly that number.
+const CATALOG = {
+  metadata: {
+    deepseek: {
+      models: {
+        'deepseek-flash': { cost: { input: 0.15, output: 0.6, cache_read: 0.003 } },
+        'deepseek-v4-pro': { cost: { input: 0.66, output: 1.98, cache_read: 0.022 } },
+        'no-price': { cost: { input: 0, output: 0 } }
+      }
+    }
+  }
+};
+
+const readCatalog = vi.fn().mockResolvedValue(CATALOG);
+const at = (iso) => Date.parse(iso);
+
+describe('isPeak', () => {
+  it('marks the two weekday windows, start included and end excluded', () => {
+    // 2026-11-10 is a Tuesday.
+    expect(isPeak(at('2026-11-10T01:00:00Z'))).toBe(true);
+    expect(isPeak(at('2026-11-10T03:59:00Z'))).toBe(true);
+    expect(isPeak(at('2026-11-10T04:00:00Z'))).toBe(false);
+    expect(isPeak(at('2026-11-10T06:00:00Z'))).toBe(true);
+    expect(isPeak(at('2026-11-10T09:59:00Z'))).toBe(true);
+    expect(isPeak(at('2026-11-10T10:00:00Z'))).toBe(false);
+  });
+
+  it('is off-peak outside the windows and all weekend', () => {
+    expect(isPeak(at('2026-11-10T00:59:00Z'))).toBe(false);
+    expect(isPeak(at('2026-11-10T12:00:00Z'))).toBe(false);
+    expect(isPeak(at('2026-11-14T03:00:00Z'))).toBe(false);
+    expect(isPeak(at('2026-11-15T07:00:00Z'))).toBe(false);
+  });
+});
+
+describe('fetchPrices', () => {
+  it('doubles the catalogue price inside a peak window', async () => {
+    const costs = await fetchPrices({
+      modelIds: ['deepseek-flash'],
+      now: at('2026-11-10T03:00:00Z'),
+      readCatalog
+    });
+
+    expect(costs).toEqual({
+      'deepseek-flash': { input: 0.3, output: 1.2, cache_read: 0.006 }
+    });
+  });
+
+  it('leaves the catalogue price alone off-peak', async () => {
+    const costs = await fetchPrices({
+      modelIds: ['deepseek-flash', 'deepseek-v4-pro'],
+      now: at('2026-11-14T03:00:00Z'),
+      readCatalog
+    });
+
+    expect(costs).toEqual({
+      'deepseek-flash': { input: 0.15, output: 0.6, cache_read: 0.003 },
+      'deepseek-v4-pro': { input: 0.66, output: 1.98, cache_read: 0.022 }
+    });
+  });
+
+  it('skips models the catalogue does not price', async () => {
+    const costs = await fetchPrices({
+      modelIds: ['no-price', 'not-in-catalogue'],
+      now: at('2026-11-10T03:00:00Z'),
+      readCatalog
+    });
+
+    expect(costs).toEqual({});
+  });
+
+  it('reads no catalogue when nothing is configured', async () => {
+    const catalog = vi.fn();
+
+    const costs = await fetchPrices({ modelIds: [], readCatalog: catalog });
+
+    expect(costs).toEqual({});
+    expect(catalog).not.toHaveBeenCalled();
   });
 });

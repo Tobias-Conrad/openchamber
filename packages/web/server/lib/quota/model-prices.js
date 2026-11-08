@@ -23,14 +23,30 @@
 import { readConfigLayers } from '../opencode/shared.js';
 import { isRecord, toProviderEntity } from '../opencode/config-v2.js';
 import { fetchPrices as fetchDeepInfraPrices } from './providers/deepinfra.js';
+import { fetchPrices as fetchDeepSeekPrices } from './providers/deepseek.js';
 
 /** A campaign price changes rarely; half an hour keeps the extra reads cheap. */
 const PRICE_TTL_MS = 30 * 60 * 1000;
 
+/**
+ * How often the written price is checked against the clock. DeepSeek switches
+ * between two prices at fixed UTC hours, so the worst case without this is a
+ * cost that stays wrong until the usage panel is opened, or until a restart.
+ * Fifteen minutes bounds that, and a write that changes nothing is skipped.
+ */
+const PRICE_REFRESH_MS = 15 * 60 * 1000;
+
 /** Providers that report prices beside their quota, keyed by quota provider id. */
 const PRICE_SOURCES = new Map([
   ['deepinfra', fetchDeepInfraPrices],
+  ['deepseek', fetchDeepSeekPrices],
 ]);
+
+/**
+ * Sources whose price depends on the clock instead of a remote catalogue. They
+ * read nothing, so the TTL does not apply to them and every refresh recomputes.
+ */
+const CLOCK_PRICE_SOURCES = new Set(['deepseek']);
 
 let sink = null;
 const lastRefreshAt = new Map();
@@ -130,4 +146,39 @@ export const refreshProviderPrices = async (providerId, {
   })();
   inFlight.set(providerId, run);
   return run;
+};
+
+/**
+ * Refresh every provider that has a price source, in order. A source that reads
+ * the clock is always recomputed; a source that reads a remote catalogue keeps
+ * its TTL.
+ *
+ * @param {object} [options]
+ * @param {number} [options.now] clock, for tests
+ * @returns {Promise<Array<{updated: boolean, reason: string}>>}
+ */
+export const refreshAllProviderPrices = async ({ now = Date.now() } = {}) => {
+  const results = [];
+  for (const providerId of PRICE_SOURCES.keys()) {
+    results.push(await refreshProviderPrices(providerId, { now, force: CLOCK_PRICE_SOURCES.has(providerId) }));
+  }
+  return results;
+};
+
+/**
+ * Refresh the prices once now, then every `intervalMs`, so a provider that
+ * switches prices by the clock reaches the config layer without anyone opening
+ * the usage panel. The timer does not keep the process alive.
+ *
+ * @param {object} [options]
+ * @param {number} [options.intervalMs]
+ * @returns {() => void} stops the timer
+ */
+export const startModelPriceRefresh = ({ intervalMs = PRICE_REFRESH_MS } = {}) => {
+  void refreshAllProviderPrices();
+  const timer = setInterval(() => {
+    void refreshAllProviderPrices();
+  }, intervalMs);
+  timer.unref?.();
+  return () => clearInterval(timer);
 };
