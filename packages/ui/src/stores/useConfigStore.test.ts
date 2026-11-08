@@ -3961,6 +3961,31 @@ describe('getModelMetadata release dates', () => {
     expect(cached.limit).toEqual({ context: 32_000, output: 4_000 });
   });
 
+  test('quotes the runtime price when a config layer overrides the catalogue', () => {
+    // DeepInfra bills a discount campaign OpenChamber writes into its config
+    // layer; the session is billed with it, so the card must not quote
+    // models.dev's list price.
+    const live = provider('deepinfra', 'deepseek-ai/DeepSeek-V4.1-Flash-1017');
+    live.models[0].cost = [{ input: 0.098, output: 0.294, cache: { read: 0.00294, write: 0 } }];
+    const cached = {
+      id: 'deepseek-ai/DeepSeek-V4.1-Flash-1017',
+      providerId: 'deepinfra',
+      name: 'DeepSeek V4.1 Flash 1017',
+      cost: { input: 0.2, output: 0.6, cache_read: 0.006, cache_write: 0 },
+      limit: { context: 1_048_576, output: 0 },
+    };
+    useConfigStore.setState({
+      providers: [live],
+      modelsMetadata: new Map([['deepinfra/deepseek-ai/DeepSeek-V4.1-Flash-1017', cached]]),
+    });
+
+    const metadata = useConfigStore.getState().getModelMetadata('deepinfra', 'deepseek-ai/DeepSeek-V4.1-Flash-1017');
+
+    expect(metadata?.cost).toEqual({ input: 0.098, output: 0.294, cache_read: 0.00294, cache_write: 0 });
+    expect(metadata?.name).toBe('DeepSeek V4.1 Flash 1017');
+    expect(metadata?.limit).toEqual({ context: 1_048_576, output: 0 });
+  });
+
   test('a valid runtime release date overrides an older exact catalog date when context is positive', () => {
     const live = provider('openai', 'gpt-6-astra');
     live.models[0].time.released = 1790640000000;

@@ -696,6 +696,32 @@ const runtimeModelReleaseDate = (released: number | undefined): string | undefin
 };
 
 /**
+ * The untiered price entry, which is the base price the card quotes.
+ */
+const untieredCost = (model: ProviderModel) => model.cost.find((entry) => !entry.tier) ?? model.cost[0];
+
+/**
+ * The price a session is billed with, when the runtime knows one. OpenCode
+ * prices a model from models.dev unless a config layer overrides it, and it
+ * bills with that number, so a card quoting the catalogue would show a price
+ * the session never pays. OpenChamber writes a provider's campaign price into
+ * its config layer exactly that way. An all-zero entry means the runtime knows
+ * no price, so the catalogue's number stays for a model only it prices.
+ */
+const billedModelCost = (model: ProviderModel): ModelMetadata['cost'] => {
+    const baseCost = untieredCost(model);
+    if (!baseCost) return undefined;
+    const cost = {
+        input: baseCost.input,
+        output: baseCost.output,
+        cache_read: baseCost.cache.read,
+        cache_write: baseCost.cache.write,
+    };
+    const known = cost.input > 0 || cost.output > 0 || cost.cache_read > 0 || cost.cache_write > 0;
+    return known ? cost : undefined;
+};
+
+/**
  * Fallback metadata for models models.dev does not list (custom providers,
  * proxies). v2 prices a model per context tier; the untiered entry is the base
  * price, so that is what the UI quotes.
@@ -706,7 +732,7 @@ const runtimeModelReleaseDate = (released: number | undefined): string | undefin
  * unknown otherwise.
  */
 const deriveModelMetadata = (providerId: string, model: ProviderModel): ModelMetadata => {
-    const baseCost = model.cost.find((entry) => !entry.tier) ?? model.cost[0];
+    const baseCost = untieredCost(model);
     const hasReasoningSignal = modelVariantNames(model).length > 0
         || model.compatibility?.reasoningField !== undefined
         || model.compatibility?.requireReasoning === true;
@@ -4603,8 +4629,12 @@ export const useConfigStore = create<ConfigStore>()(
                         if (!model) return cached;
                         const releaseDate = runtimeModelReleaseDate(model.time?.released);
                         const hasLiveLimits = model.limit.context > 0;
-                        if (!hasLiveLimits && !releaseDate) return cached;
+                        // The runtime's price is what a session is billed with;
+                        // the catalogue only fills in when it knows none.
+                        const billedCost = billedModelCost(model);
+                        if (!hasLiveLimits && !releaseDate && !billedCost) return cached;
                         const metadata: ModelMetadata = { ...cached };
+                        if (billedCost) metadata.cost = billedCost;
                         if (hasLiveLimits) {
                             metadata.limit = {
                                 ...cached.limit,
