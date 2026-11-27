@@ -152,7 +152,7 @@ test('a quote hint is drawn in the interface language with a literal escape, and
       </Ukrainian>
     </I18nProvider>,
   ));
-  await show('page', 'root = Stack([a])\na = Text("ein „X". Das war so.")', { kind: 'page', submit: null, answered: null });
+  await show('page', 'root = Stack([Text("Use "a", "b" or c")])', { kind: 'page', submit: null, answered: null });
   expect(host.textContent).toContain(hint);
   expect(hint).toContain('\\"');
   expect(reported).toEqual([[STRAY_QUOTE_ERROR]]);

@@ -254,10 +254,20 @@ const canDropParts = (source: string, kept: BlockValue): boolean => (
   !asksSomething.test(source) && (childSlots.safeParse(blockNode.safeParse(kept).data?.props).data?.children?.length ?? 0) > 0
 );
 
+// A block that parses cleanly is never touched. Only a complete block that already fails gets a repair: escape at
+// most eight straight quotes that follow an opened German quote, trying the smallest sets first, and keep the first
+// set whose parse has no problems left. That is at most 255 extra parses, and the caller memoizes the result. A
+// clean set is taken even when it pulls code-like text into a string, because the block was invalid without the
+// repair anyway. A partial repair is taken only when it repeats messages of the plain parse and leaves fewer; a
+// shape message the plain parse did not have makes it unusable. A value error the plain parse never reached may
+// still surface.
 export function parseUiBlock(source: string, complete: boolean, salvage = false, extensions: ExtensionBlocks = NO_EXTENSION_BLOCKS): UiBlockParse {
   const parsed = parseProgram(source, complete, salvage, extensions);
   const errors = parseProblems(parsed);
-  const escaped = complete && errors.length ? escapeStrayQuotes(source) : null;
+  if (!complete || !errors.length) return parsed;
+  const repaired = repairGermanQuotes(source, complete, salvage, extensions);
+  if (repaired && acceptsRepair(repaired, errors)) return repaired.parsed;
+  const escaped = escapeStrayQuotes(source);
   if (escaped === null) return parsed;
   const remaining = parseProblems(parseProgram(escaped, complete, salvage, extensions));
   if (remaining.includes(INCOMPLETE_ERROR)) return parsed;
@@ -279,12 +289,115 @@ const parseProblems = (parsed: UiBlockParse): string[] => {
 
 const INCOMPLETE_ERROR = 'The block ends in the middle of a statement';
 
+// external: https://github.com/thesysdev/openui/tree/main/packages/lang-core The tokenizer knows only " and ' as string bounds, and its tokens carry no positions. A German quote closed by a straight quote ends the string early. Each opened „ makes the next three unescaped " candidates, because inner quotes may follow before the German close; a closing “ ends the mark, and a „ inside '...' does not open one. The parser skips # and // comments outside strings, so those are skipped too.
+const CANDIDATES_PER_GERMAN_QUOTE = 3;
+
+function germanQuoteCandidates(source: string): number[] {
+  const candidates = new Set<number>();
+  let germanQuotesLeft = 0;
+  let quote: '"' | "'" | null = null;
+  for (let index = 0; index < source.length; index += 1) {
+    const char = source[index];
+    if (char === '\\') {
+      index += 1;
+      continue;
+    }
+    if (quote === null && (char === '#' || source.startsWith('//', index))) {
+      const lineEnd = source.indexOf('\n', index);
+      if (lineEnd === -1) break;
+      index = lineEnd;
+      continue;
+    }
+    if (char === '„' && quote !== "'") {
+      germanQuotesLeft = CANDIDATES_PER_GERMAN_QUOTE;
+      continue;
+    }
+    if (char === '“' && quote !== "'") {
+      germanQuotesLeft = 0;
+      continue;
+    }
+    if (char === "'" && quote !== '"') {
+      quote = quote === "'" ? null : "'";
+      continue;
+    }
+    if (char === '"' && quote !== "'") {
+      if (germanQuotesLeft > 0) {
+        candidates.add(index);
+        germanQuotesLeft -= 1;
+      }
+      quote = quote === '"' ? null : '"';
+    }
+  }
+  return [...candidates].sort((a, b) => a - b);
+}
+
+const MAX_QUOTE_CANDIDATES = 8;
+
+function escapeSelected(source: string, candidates: readonly number[], mask: number): string {
+  const chosen = new Set(candidates.filter((_, bit) => mask & (1 << bit)));
+  let escaped = '';
+  for (let index = 0; index < source.length; index += 1) escaped += chosen.has(index) ? '\\"' : source[index];
+  return escaped;
+}
+
+const bitCount = (mask: number): number => {
+  let count = 0;
+  for (let bits = mask; bits; bits >>= 1) count += bits & 1;
+  return count;
+};
+
+type RepairAttempt = { parsed: UiBlockParse; problems: string[]; structural: boolean };
+
+function repairGermanQuotes(source: string, complete: boolean, salvage: boolean, extensions: ExtensionBlocks): RepairAttempt | null {
+  const candidates = germanQuoteCandidates(source);
+  if (!candidates.length || candidates.length > MAX_QUOTE_CANDIDATES) return null;
+  let best: RepairAttempt | null = null;
+  for (let size = 1; size <= candidates.length; size += 1) {
+    for (let mask = 1; mask < 1 << candidates.length; mask += 1) {
+      if (bitCount(mask) !== size) continue;
+      const { parsed, structural } = parseProgramDetail(escapeSelected(source, candidates, mask), complete, salvage, extensions);
+      const problems = parseProblems(parsed);
+      if (!problems.length) return { parsed, problems, structural };
+      if (!best || problems.length < best.problems.length) best = { parsed, problems, structural };
+    }
+  }
+  return best;
+}
+
+// A partial repair may only repeat messages the plain parse already had. The one exception is a value error in a call
+// the plain parse never reached because it stopped mid-statement: that is a real fault of the block, not of the repair.
+function acceptsRepair(attempt: RepairAttempt, plain: readonly string[]): boolean {
+  if (!attempt.problems.length) return true;
+  if (attempt.problems.length >= plain.length) return false;
+  const remaining = [...plain];
+  const repeats = attempt.problems.every((problem) => {
+    const at = remaining.indexOf(problem);
+    if (at === -1) return false;
+    remaining.splice(at, 1);
+    return true;
+  });
+  if (repeats) return true;
+  return !attempt.structural && plain.includes(INCOMPLETE_ERROR);
+}
+
 function parseProgram(source: string, complete: boolean, salvage: boolean, extensions: ExtensionBlocks): UiBlockParse {
+  return parseProgramDetail(source, complete, salvage, extensions).parsed;
+}
+
+// `structural` marks a failure in the call shape (a broken string, an excess argument), not a value error in a call
+// that arrived intact. A repair may expose a value error the plain parse never reached; it must not add shape errors.
+const VALUE_ERROR_CODES = new Set(['type-mismatch']);
+
+function parseProgramDetail(source: string, complete: boolean, salvage: boolean, extensions: ExtensionBlocks): { parsed: UiBlockParse; structural: boolean } {
   const result = parserFor(extensions).parse(source);
-  const errors = result.meta.errors
-    .filter((error) => !(error.component === 'Details' && error.path === '/children' && error.code === 'missing-required'))
-    .map((error) => [error.component, error.path].filter(Boolean).join(' ') + `: ${error.message}`);
+  const metaErrors = result.meta.errors
+    .filter((error) => !(error.component === 'Details' && error.path === '/children' && error.code === 'missing-required'));
+  const errors = metaErrors.map((error) => [error.component, error.path].filter(Boolean).join(' ') + `: ${error.message}`);
   const namedError = complete ? namedArgumentError(source, result.meta) : null;
+  const structural = metaErrors.some((error) => !VALUE_ERROR_CODES.has(error.code))
+    || Boolean(namedError)
+    || result.meta.unresolved.length > 0
+    || result.meta.orphaned.length > 0;
   if (complete) {
     if (result.meta.unresolved.length) errors.push(`Undefined names: ${result.meta.unresolved.join(', ')}`);
     if (result.meta.orphaned.length) errors.push(`Defined but never used: ${result.meta.orphaned.join(', ')}`);
@@ -295,11 +408,11 @@ function parseProgram(source: string, complete: boolean, salvage: boolean, exten
     }
     if (result.root?.typeName !== 'Stack') unusable.push('The block needs root = Stack([...])');
     if (namedError) errors.splice(0, errors.length, namedError);
-    if (unusable.length || (errors.length && !salvage)) return { kind: 'invalid', errors: [...errors, ...unusable] };
+    if (unusable.length || (errors.length && !salvage)) return { parsed: { kind: 'invalid', errors: [...errors, ...unusable] }, structural: structural || unusable.length > 0 };
   }
-  if (!result.root || result.root.typeName !== 'Stack') return { kind: 'empty' };
+  if (!result.root || result.root.typeName !== 'Stack') return { parsed: { kind: 'empty' }, structural: true };
   if (!complete) {
-    return result.root.hasDynamicProps ? { kind: 'empty' } : { kind: 'ready', root: toBlockValue(result.root), dropped: [] };
+    return { parsed: result.root.hasDynamicProps ? { kind: 'empty' } : { kind: 'ready', root: toBlockValue(result.root), dropped: [] }, structural: false };
   }
   let root = result.root;
   if (root.hasDynamicProps) {
@@ -310,17 +423,17 @@ function parseProgram(source: string, complete: boolean, salvage: boolean, exten
       errors: evaluationErrors,
       ctx: { getState: () => undefined, resolveRef: () => undefined },
     });
-    if (evaluationErrors.length || !evaluated) return { kind: 'invalid', errors: ['An expression in the block could not be evaluated'] };
+    if (evaluationErrors.length || !evaluated) return { parsed: { kind: 'invalid', errors: ['An expression in the block could not be evaluated'] }, structural: true };
     root = evaluated;
   }
   const tree = toBlockValue(root);
   const treeErrors: string[] = [];
   const kept = soundNode(tree, treeErrors, extensions);
   const problems = namedError ? errors : [...errors, ...treeErrors];
-  if (!problems.length) return { kind: 'ready', root: tree, dropped: [] };
+  if (!problems.length) return { parsed: { kind: 'ready', root: tree, dropped: [] }, structural: false };
   // external: https://github.com/thesysdev/openui/tree/main/packages/lang-core Expressions over broken names can evaluate to invented values, so expression blocks cannot be salvaged.
-  if (!salvage || !kept || result.root.hasDynamicProps || !canDropParts(source, kept)) return { kind: 'invalid', errors: problems };
-  return { kind: 'ready', root: kept, dropped: problems };
+  if (!salvage || !kept || result.root.hasDynamicProps || !canDropParts(source, kept)) return { parsed: { kind: 'invalid', errors: problems }, structural };
+  return { parsed: { kind: 'ready', root: kept, dropped: problems }, structural };
 }
 
 // external: https://github.com/thesysdev/openui/tree/main/packages/lang-core Token kinds are not exported; derive them with the tokenizer.

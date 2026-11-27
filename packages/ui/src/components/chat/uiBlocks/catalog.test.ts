@@ -95,12 +95,122 @@ describe('parseUiBlock', () => {
     expect(parseUiBlock('root = Stack([Text("a", "b")])', true)).toEqual({ kind: 'invalid', errors: ['Text: Text takes 1 arg(s), got 2 (1 excess dropped)'] });
   });
 
+  test('a German quote closed with a straight quote keeps reading as one string', () => {
+    const textOf = (source: string) => {
+      const parsed = parseUiBlock(source, true);
+      if (parsed.kind !== 'ready') throw new Error(`expected ready, got ${parsed.kind}`);
+      return blockProps.Text.parse(childrenOf(parsed.root)[0].props).markdown;
+    };
+    expect(textOf(`root = Stack([a])
+a = Text("Kasten [wi_prompter] in der Liste „Global Shortcodes". Rückweg .bak-20261127.")`))
+      .toBe('Kasten [wi_prompter] in der Liste „Global Shortcodes". Rückweg .bak-20261127.');
+    expect(textOf('root = Stack([Text("Das „X" und „Y" gut")])')).toBe('Das „X" und „Y" gut');
+    expect(textOf('root = Stack([Text("ein „X")])')).toBe('ein „X');
+    expect(parseUiBlock('root = Stack([Text("ein „X“ und „Y“ gut")])', true).kind).toBe('ready');
+    expect(parseUiBlock('root = Stack([Text("ein „X". Das war so.")])', true).kind).toBe('ready');
+    expect(parseUiBlock('root = Stack([Text("ein „X\\". Das war so.")])', true).kind).toBe('ready');
+    expect(parseUiBlock('root = Stack([Text("Use "a", "b" or c")])', true)).toEqual({ kind: 'invalid', errors: [STRAY_QUOTE_ERROR] });
+    const single = parseUiBlock("root = Stack([Text('a „X\" b')])", true);
+    if (single.kind !== 'ready') throw new Error(`expected ready, got ${single.kind}`);
+    expect(blockProps.Text.parse(childrenOf(single.root)[0].props).markdown).toBe('a „X" b');
+    const choice = parseUiBlock('root = Stack([Choice("q", ["Zitat „", "\\"Hallo\\" sagen"])])', true);
+    if (choice.kind !== 'ready') throw new Error(`expected ready, got ${choice.kind}`);
+    expect(blockProps.Choice.parse(childrenOf(choice.root)[0].props).options).toEqual(['Zitat „', '"Hallo" sagen']);
+  });
+
+  test('a German quote that is only text does not swallow the end of the string', () => {
+    const source = `root = Stack([h5])
+h5 = Card("H5 Hinweis bei Add registrants", [Text("99571, Reiter Console, Add registrants. Grün: der Hinweis sagt „bereits registriert\\uff0c der alte lange Satz steht nirgends."), Text("[Webinar 99571](https://example.test/wp-admin/admin.php?page=webinar-dashboard)"), Row([Button("grün", "secondary", "H5"), Button("rot", "secondary", "H5")]), Input("n_H5", "Notiz zu H5")])`;
+    const parsed = parseUiBlock(source, true);
+    if (parsed.kind !== 'ready') throw new Error(`expected ready, got ${parsed.kind}`);
+    const [card] = childrenOf(parsed.root);
+    const [text] = blockProps.Card.parse(card.props).children.map((child) => blockNode.parse(child));
+    expect(blockProps.Text.parse(text.props).markdown).toContain('„bereits registriert');
+  });
+
+  test('a German close that the author already escaped stays one string', () => {
+    const parsed = parseUiBlock('root = Stack([Text("Kasten „Global \\"Shortcodes". Rest.")])', true);
+    if (parsed.kind !== 'ready') throw new Error(`expected ready, got ${parsed.kind}`);
+    expect(blockProps.Text.parse(childrenOf(parsed.root)[0].props).markdown).toBe('Kasten „Global "Shortcodes". Rest.');
+  });
+
+  test('a German quote in a string that runs over a line break keeps the break', () => {
+    const parsed = parseUiBlock('root = Stack([Text("a „b\\nc")])', true);
+    if (parsed.kind !== 'ready') throw new Error(`expected ready, got ${parsed.kind}`);
+    expect(blockProps.Text.parse(childrenOf(parsed.root)[0].props).markdown).toBe('a „b\nc');
+  });
+
+  test('two German closes in one string need the whole set, not the first one', () => {
+    const source = `root = Stack([c1])
+c1 = Callout("**Nur die Mini-Regel ist tot.** Die Admin-Regel lebt weiter, und zwei Zweige liefern Text („Almost there: confirm your email…", „Connect this site for the assistant"). Wer sie mitstreicht, nimmt dem Backend die Zeile.", "warning", "Nachtrag 1")`;
+    const parsed = parseUiBlock(source, true);
+    if (parsed.kind !== 'ready') throw new Error(`expected ready, got ${parsed.kind}`);
+    const [callout] = childrenOf(parsed.root);
+    expect(blockProps.Callout.parse(callout.props)).toEqual({
+      markdown: '**Nur die Mini-Regel ist tot.** Die Admin-Regel lebt weiter, und zwei Zweige liefern Text („Almost there: confirm your email…", „Connect this site for the assistant"). Wer sie mitstreicht, nimmt dem Backend die Zeile.',
+      tone: 'warning',
+      title: 'Nachtrag 1',
+    });
+  });
+
+  test('a block that parses cleanly is never touched', () => {
+    const parsed = parseUiBlock('root = Stack([Text("ein „X“ und „Y“ gut"), Badge("draft", "info")])', true);
+    if (parsed.kind !== 'ready') throw new Error(`expected ready, got ${parsed.kind}`);
+    expect(blockProps.Text.parse(childrenOf(parsed.root)[0].props).markdown).toBe('ein „X“ und „Y“ gut');
+    expect(blockProps.Badge.parse(childrenOf(parsed.root)[1].props).tone).toBe('info');
+  });
+
+  test('six straight German closes in one string are repaired past the old limit', () => {
+    const parsed = parseUiBlock('root = Stack([Text("„A" „B" „C" „D" „E" „F" gut")])', true);
+    if (parsed.kind !== 'ready') throw new Error(`expected ready, got ${parsed.kind}`);
+    expect(blockProps.Text.parse(childrenOf(parsed.root)[0].props).markdown).toBe('„A" „B" „C" „D" „E" „F" gut');
+  });
+
+  test('closed German quotes in separate strings do not use up the candidate budget', () => {
+    const source = 'root = Stack([Text("a „A“"), Text("b „B“"), Text("c „C“"), Text("d „D“"), Text("e „E“"), Text("f „F“"), Text("und „Ziel". Rest.")])';
+    const parsed = parseUiBlock(source, true);
+    if (parsed.kind !== 'ready') throw new Error(`expected ready, got ${parsed.kind}`);
+    expect(childrenOf(parsed.root).map((child) => blockProps.Text.parse(child.props).markdown)).toEqual([
+      'a „A“', 'b „B“', 'c „C“', 'd „D“', 'e „E“', 'f „F“', 'und „Ziel". Rest.',
+    ]);
+  });
+
+  test('a German open inside a single-quoted string makes no candidate', () => {
+    const source = `root = Stack([Text('a „X'), Text("b "c" d")])`;
+    expect(parseUiBlock(source, true)).toEqual({ kind: 'invalid', errors: [STRAY_QUOTE_ERROR] });
+  });
+
+  test('inner quotes after an opened German quote are candidates too', () => {
+    const source = `root = Stack([Text("Zitat „das ist "so" gemeint". Ende")])`;
+    const parsed = parseUiBlock(source, true);
+    if (parsed.kind !== 'ready') throw new Error(`expected ready, got ${parsed.kind}`);
+    expect(blockProps.Text.parse(childrenOf(parsed.root)[0].props).markdown).toBe('Zitat „das ist "so" gemeint". Ende');
+  });
+
+  test('the tone error survives when a German quote was repaired', () => {
+    const parsed = parseUiBlock('root = Stack([Text("Die Liste „Global Shortcodes"."), Badge("draft", "bogus")])', true);
+    if (parsed.kind !== 'invalid') throw new Error(`expected invalid, got ${parsed.kind}`);
+    // The plain parse dies on the quote and never validates the Badge; the repaired parse names that real fault alone.
+    expect(parsed.errors).toHaveLength(1);
+    expect(parsed.errors[0]).toContain('got "bogus"');
+    expect(parsed.errors.join('\n')).not.toContain(STRAY_QUOTE_ERROR);
+    expect(parsed.errors.join('\n')).not.toContain('takes');
+  });
+
+  test('a partial repair that would add a shape message is not taken', () => {
+    const broken = 'root = Stack([Text("Die Liste „Global Shortcodes"."), Badge("draft", "info", "extra")])';
+    const repairedByHand = 'root = Stack([Text("Die Liste „Global Shortcodes\\"."), Badge("draft", "info", "extra")])';
+    const alone = parseUiBlock(repairedByHand, true);
+    if (alone.kind !== 'invalid') throw new Error(`expected invalid, got ${alone.kind}`);
+    expect(alone.errors).toHaveLength(1);
+    expect(alone.errors.join('\n')).toContain('Badge takes 2 arg(s), got 3');
+    const parsed = parseUiBlock(broken, true);
+    if (parsed.kind !== 'invalid') throw new Error(`expected invalid, got ${parsed.kind}`);
+    expect(parsed.errors.join('\n')).not.toContain('Badge takes 2 arg(s), got 3');
+  });
+
   test('a quote that ends a string early is named in place of the errors it caused', () => {
-    const leftOpen = 'root = Stack([a])\na = Text("ein „X". Das war so.")';
     const cut = { kind: 'invalid', errors: [STRAY_QUOTE_ERROR] } as const;
-    expect(parseUiBlock(leftOpen, true)).toEqual(cut);
-    expect(parseUiBlock(leftOpen, true, true)).toEqual(cut);
-    expect(parseUiBlock('root = Stack([Text("Das „X" und „Y" gut")])', true)).toEqual(cut);
     expect(parseUiBlock('root = Stack([c])\nc = Choice("q", ["Use "fast" mode", "Other"])', true, true)).toEqual(cut);
     expect(parseUiBlock('root = Stack([c])\nc = Choice("When?", ["Wait "5 minutes" then retry", "Now"])', true)).toEqual(cut);
     expect(parseUiBlock('root = Stack([Text("Use "a", "b" or c")])', true)).toEqual(cut);
